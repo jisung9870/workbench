@@ -74,3 +74,20 @@ func TestDeriveIDFallsBackForNonASCIIName(t *testing.T) {
 		t.Fatalf("unexpected fallback id: %s", id)
 	}
 }
+
+func TestWindowsWSLOverlayRoundTrips(t *testing.T) {
+	store, _ := testStore(t)
+	projectDir := t.TempDir()
+	project := Project{
+		ID: "alpha", Name: "Alpha", Path: projectDir, RepoRoot: projectDir,
+		DefaultBackend: "windows-terminal", Editor: "nvim", Tags: []string{}, Profile: "personal",
+		WindowsWSL: &WindowsWSL{Distro: "Ubuntu-24.04", WSLPath: "/home/me/alpha"},
+	}
+	if _, err := store.AddMany([]Project{project}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, found, err := store.Show("alpha")
+	if err != nil || !found || loaded.WindowsWSL == nil || loaded.WindowsWSL.WSLPath != "/home/me/alpha" {
+		t.Fatalf("overlay did not round-trip: %#v found=%t err=%v", loaded, found, err)
+	}
+}

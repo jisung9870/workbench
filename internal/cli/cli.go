@@ -1,11 +1,20 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
+	cmuxadapter "github.com/jisung9870/workbench/adapters/cmux"
+	shelladapter "github.com/jisung9870/workbench/adapters/shell"
+	tmuxadapter "github.com/jisung9870/workbench/adapters/tmux"
+	wtadapter "github.com/jisung9870/workbench/adapters/windows_terminal"
+	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/migrate"
 	"github.com/jisung9870/workbench/internal/output"
@@ -13,10 +22,11 @@ import (
 )
 
 const (
-	ExitOK       = 0
-	ExitGeneral  = 1
-	ExitArgument = 2
-	ExitConflict = 4
+	ExitOK          = 0
+	ExitGeneral     = 1
+	ExitArgument    = 2
+	ExitUnavailable = 3
+	ExitConflict    = 4
 )
 
 type commandError struct {
@@ -46,6 +56,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		commandErr = runConfig(args[1:], paths, stdout)
 	case "migrate":
 		commandErr = runMigrate(args[1:], paths, stdout, stderr)
+	case "open":
+		commandErr = runOpen(args[1:], paths, stdout, stderr)
 	case "help", "--help", "-h":
 		fmt.Fprint(stdout, usage())
 		return ExitOK
@@ -56,6 +68,79 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return report(stdout, stderr, jsonMode, commandErr)
 	}
 	return ExitOK
+}
+
+func runOpen(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
+	positionals, options, parseErr := parseOptions(args, map[string]bool{"--backend": true})
+	if parseErr != nil || len(positionals) != 1 {
+		return invalid("usage: wb open <project-id> [--backend auto|cmux|windows-terminal|tmux|shell]")
+	}
+	requested := backend.Auto
+	if value := options["--backend"]; value != "" {
+		parsed, backendErr := backend.ParseName(value)
+		if backendErr != nil {
+			return invalid("%s", backendErr)
+		}
+		requested = parsed
+	}
+	project, found, loadErr := projects.NewStore(paths).Show(positionals[0])
+	if loadErr != nil {
+		return configError(loadErr)
+	}
+	if !found {
+		return &commandError{ExitCode: ExitGeneral, Code: "PROJECT_NOT_FOUND", Message: fmt.Sprintf("project %q was not found", positionals[0]), Details: map[string]any{"project_id": positionals[0]}}
+	}
+	settings, settingsErr := config.LoadSettings(paths.ConfigFile)
+	if settingsErr != nil {
+		return configError(settingsErr)
+	}
+	profile, profileErr := config.LoadProfile(paths, settings.ActiveProfile)
+	if profileErr != nil {
+		return configError(profileErr)
+	}
+	executor := &backend.OSExecutor{Stdin: os.Stdin, Stdout: stdout, Stderr: stderr}
+	environment := backend.CurrentEnvironment()
+	registry := backend.NewRegistry(environment,
+		shelladapter.New(executor, shelladapter.Environment{GOOS: runtime.GOOS, Getenv: os.Getenv}),
+		tmuxadapter.New(executor, os.Getenv),
+		cmuxadapter.New(executor, runtime.GOOS),
+		wtadapter.New(executor, wtadapter.Environment{GOOS: runtime.GOOS, Getenv: os.Getenv}),
+	)
+	request := backend.OpenRequest{Project: project, Profile: profile}
+	selection, selectErr := registry.Select(context.Background(), request, requested)
+	if selectErr != nil {
+		var unavailable *backend.UnavailableError
+		if errors.As(selectErr, &unavailable) {
+			fallbacks := make([]string, len(unavailable.Fallback))
+			for index, fallback := range unavailable.Fallback {
+				fallbacks[index] = string(fallback)
+			}
+			return &commandError{
+				ExitCode: ExitUnavailable, Code: "BACKEND_UNAVAILABLE", Message: unavailable.Error(),
+				Details: map[string]any{"backend": unavailable.Backend, "fallbacks": fallbacks},
+			}
+		}
+		return invalid("%s", selectErr)
+	}
+	for _, warning := range selection.Warnings {
+		fmt.Fprintf(stderr, "warning: %s\n", warning)
+	}
+	result, openErr := selection.Adapter.OpenProject(context.Background(), request)
+	if result.Stdout != "" {
+		fmt.Fprint(stdout, result.Stdout)
+	}
+	if result.Stderr != "" {
+		fmt.Fprint(stderr, result.Stderr)
+	}
+	if openErr != nil {
+		return &commandError{
+			ExitCode: ExitGeneral, Code: "BACKEND_EXECUTION_FAILED",
+			Message: fmt.Sprintf("backend %q failed for %s: %v", result.Backend, result.Reference, openErr),
+			Details: map[string]any{"backend": result.Backend, "reference": result.Reference, "exit_code": result.ExitCode, "command": result.Command},
+		}
+	}
+	fmt.Fprintf(stdout, "opened %s with %s (%s)\n", project.ID, result.Backend, result.Reference)
+	return nil
 }
 
 func runProjects(args []string, paths config.Paths, stdout io.Writer) *commandError {
@@ -285,6 +370,7 @@ Usage:
   wb projects show <id> [--json]
   wb projects add <path> [--id <id>] [--profile <profile>]
   wb projects remove <id>
+  wb open <project-id> [--backend auto|cmux|windows-terminal|tmux|shell]
   wb config validate
   wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
 `

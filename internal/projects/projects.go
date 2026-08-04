@@ -19,14 +19,20 @@ import (
 const SchemaVersion = 1
 
 type Project struct {
-	ID             string   `toml:"id" json:"id"`
-	Name           string   `toml:"name" json:"name"`
-	Path           string   `toml:"path" json:"path"`
-	RepoRoot       string   `toml:"repo_root" json:"repo_root"`
-	DefaultBackend string   `toml:"default_backend" json:"default_backend"`
-	Editor         string   `toml:"editor" json:"editor"`
-	Tags           []string `toml:"tags" json:"tags"`
-	Profile        string   `toml:"profile" json:"profile"`
+	ID             string      `toml:"id" json:"id"`
+	Name           string      `toml:"name" json:"name"`
+	Path           string      `toml:"path" json:"path"`
+	RepoRoot       string      `toml:"repo_root" json:"repo_root"`
+	DefaultBackend string      `toml:"default_backend" json:"default_backend"`
+	Editor         string      `toml:"editor" json:"editor"`
+	Tags           []string    `toml:"tags" json:"tags"`
+	Profile        string      `toml:"profile" json:"profile"`
+	WindowsWSL     *WindowsWSL `toml:"windows_wsl,omitempty" json:"windows_wsl,omitempty"`
+}
+
+type WindowsWSL struct {
+	Distro  string `toml:"distro" json:"distro"`
+	WSLPath string `toml:"wsl_path" json:"wsl_path"`
 }
 
 type Registry struct {
@@ -245,6 +251,17 @@ func validateRegistry(registry Registry) error {
 		paths[pathKey] = project.ID
 		if project.Profile == "" {
 			return fmt.Errorf("project %q profile must not be empty", project.ID)
+		}
+		if !config.ValidProfileName(project.Profile) {
+			return fmt.Errorf("project %q has invalid profile %q", project.ID, project.Profile)
+		}
+		if project.DefaultBackend == "" || !config.ValidBackend(project.DefaultBackend) {
+			return fmt.Errorf("project %q has invalid default_backend %q", project.ID, project.DefaultBackend)
+		}
+		if project.WindowsWSL != nil {
+			if project.WindowsWSL.Distro == "" || !strings.HasPrefix(project.WindowsWSL.WSLPath, "/") {
+				return fmt.Errorf("project %q windows_wsl requires distro and an absolute wsl_path", project.ID)
+			}
 		}
 	}
 	return nil

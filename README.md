@@ -27,6 +27,7 @@ wb projects list [--json]
 wb projects show <id> [--json]
 wb projects add <path> [--id <id>] [--profile <profile>]
 wb projects remove <id>
+wb open <id> [--backend auto|cmux|windows-terminal|tmux|shell]
 wb config validate
 wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
 ```
@@ -66,7 +67,8 @@ schema_version = 1
 active_profile = "personal"
 ```
 
-Profile files support `schema_version`, `default_backend`, and `editor`.
+Profile files support `schema_version`, `default_backend`, `editor`, and
+`windows_terminal_profile`.
 Unknown TOML fields, unsupported schema versions, and parser errors fail
 `wb config validate` instead of being silently ignored.
 
@@ -90,6 +92,47 @@ profile = "personal"
 An explicitly supplied `--id` is the portable identity when project directory
 names differ across machines. Without it, `wb` derives a readable lowercase ID
 from the directory basename and rejects collisions.
+
+An optional active profile can select a backend and Windows Terminal profile:
+
+```toml
+schema_version = 1
+default_backend = "auto"
+editor = "nvim"
+windows_terminal_profile = "Ubuntu-24.04"
+```
+
+## Opening a project
+
+`--backend` always wins. With `auto`, `wb` tries the project's
+`default_backend`, the active profile default, native Windows Terminal, cmux on
+macOS outside SSH, tmux in tmux/SSH/WSL environments, and finally the user's
+shell. An unavailable configured preference produces a warning before a safe
+fallback; an explicitly requested unavailable backend exits with code 3 and
+lists usable alternatives.
+
+```bash
+wb open terraform-lab
+wb open terraform-lab --backend tmux
+wb open terraform-lab --backend windows-terminal
+```
+
+The shell adapter starts the configured interactive shell in the project
+directory. The tmux adapter creates or reuses the exact project-ID session. The
+cmux adapter invokes `cmux <project-path>` only on macOS. The Windows Terminal
+adapter distinguishes native Windows from WSL and never infers a WSL path from
+a Windows path. Native-to-WSL projects require an explicit registry overlay:
+
+```toml
+[projects.windows_wsl]
+distro = "Ubuntu-24.04"
+wsl_path = "/home/me/projects/terraform-lab"
+```
+
+External processes are invoked as argument arrays. Launch timeout, exit code,
+stdout, stderr, command arguments, and backend reference are retained in the
+result or error. Interactive shell/tmux sessions intentionally have no launch
+timeout because their lifetime is controlled by the user.
 
 ## Sessionizer migration
 
