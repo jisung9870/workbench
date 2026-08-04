@@ -422,9 +422,9 @@ func worktreeError(err error, stderr io.Writer) *commandError {
 }
 
 func runOpen(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
-	positionals, options, parseErr := parseOptions(args, map[string]bool{"--backend": true})
+	positionals, options, parseErr := parseOptions(args, map[string]bool{"--backend": true, "--window": true, "--terminal-mode": true})
 	if parseErr != nil || len(positionals) != 1 {
-		return invalid("usage: wb open <project-id> [--backend auto|cmux|windows-terminal|tmux|shell]")
+		return invalid("usage: wb open <project-id> [--backend <backend>] [--window <last|new|id>] [--terminal-mode <mode>]")
 	}
 	requested := backend.Auto
 	if value := options["--backend"]; value != "" {
@@ -449,6 +449,20 @@ func runOpen(args []string, paths config.Paths, stdout, stderr io.Writer) *comma
 	if profileErr != nil {
 		return configError(profileErr)
 	}
+	_, windowOverride := options["--window"]
+	if windowOverride {
+		if !config.ValidWindowsTerminalWindow(options["--window"]) {
+			return invalid("invalid Windows Terminal window %q", options["--window"])
+		}
+		profile.WindowsTerminalWindow = options["--window"]
+	}
+	_, modeOverride := options["--terminal-mode"]
+	if modeOverride {
+		if !config.ValidWindowsTerminalMode(options["--terminal-mode"]) {
+			return invalid("invalid Windows Terminal mode %q", options["--terminal-mode"])
+		}
+		profile.WindowsTerminalMode = options["--terminal-mode"]
+	}
 	executor := &backend.OSExecutor{Stdin: os.Stdin, Stdout: stdout, Stderr: stderr}
 	environment := backend.CurrentEnvironment()
 	registry := backend.NewRegistry(environment,
@@ -472,6 +486,9 @@ func runOpen(args []string, paths config.Paths, stdout, stderr io.Writer) *comma
 			}
 		}
 		return invalid("%s", selectErr)
+	}
+	if (windowOverride || modeOverride) && selection.Adapter.Name() != backend.WindowsTerminal {
+		return invalid("--window and --terminal-mode require the Windows Terminal backend")
 	}
 	for _, warning := range selection.Warnings {
 		fmt.Fprintf(stderr, "warning: %s\n", warning)
@@ -724,7 +741,7 @@ Usage:
   wb projects show <id> [--json]
   wb projects add <path> [--id <id>] [--profile <profile>]
   wb projects remove <id>
-  wb open <project-id> [--backend auto|cmux|windows-terminal|tmux|shell]
+  wb open <project-id> [--backend <backend>] [--window <last|new|id>] [--terminal-mode <tab|split-auto|split-horizontal|split-vertical>]
   wb worktrees list <project-id> [--json]
   wb worktrees create <project-id> <branch> [--base <ref>]
   wb worktrees remove <worktree-id> [--delete-branch]

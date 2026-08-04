@@ -109,6 +109,58 @@ func TestOpenShellPreservesBackendExit(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsWindowsTerminalOptionsForShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture")
+	}
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	t.Setenv("SHELL", "/bin/false")
+	projectDir := filepath.Join(root, "alpha")
+	if err := os.Mkdir(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"projects", "add", projectDir}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("add failed: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"open", "alpha", "--backend", "shell", "--window", "new"}, &stdout, &stderr); code != ExitArgument {
+		t.Fatalf("expected argument error, got %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "require the Windows Terminal backend") {
+		t.Fatalf("missing backend constraint: %s", stderr.String())
+	}
+}
+
+func TestOpenRejectsInvalidWindowsTerminalMode(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	projectDir := filepath.Join(root, "alpha")
+	if err := os.Mkdir(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"projects", "add", projectDir}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("add failed: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"open", "alpha", "--terminal-mode", "diagonal"}, &stdout, &stderr); code != ExitArgument {
+		t.Fatalf("expected argument error, got %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "invalid Windows Terminal mode") {
+		t.Fatalf("missing validation error: %s", stderr.String())
+	}
+}
+
 func TestConfirmBranchRequiresExactName(t *testing.T) {
 	var output bytes.Buffer
 	if confirmBranch(strings.NewReader("wrong\n"), &output, "feature/delete") {

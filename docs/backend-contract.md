@@ -52,7 +52,17 @@ References currently use `shell:<project-id>`, `tmux:<project-id>`,
 ## Windows and WSL
 
 Native projects use `wt.exe ... --startingDirectory <native-path>`. WSL opens
-use `wt.exe ... wsl.exe [-d <distro>] --cd <wsl-path>`. A native project may
+use `wt.exe --window <target> (new-tab|split-pane) ... wsl.exe -d <distro>
+--cd <wsl-path>`. A native project may
 target WSL only when both `windows_wsl.distro` and `windows_wsl.wsl_path` are
 present. Windows Terminal settings are read as JSONC when available so a missing
-configured profile can fall back during preflight with recovery guidance.
+configured profile name or GUID can fall back during preflight with recovery
+guidance. WSL distro precedence is project overlay, active profile, then
+`WSL_DISTRO_NAME`; WSL detection refuses a launch if all three are absent.
+
+Window and tab/pane selection are typed values rather than arbitrary command
+fragments. `last` and `new` are the default-window targets; a configured ID/name
+is also accepted. Modes map to `new-tab`, `split-pane`, `split-pane
+--horizontal`, or `split-pane --vertical`. Per-invocation `--window` and
+`--terminal-mode` options are valid only when the selected backend is Windows
+Terminal.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jisung9870/workbench/internal/backend"
+	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/projects"
 )
 
@@ -37,17 +38,29 @@ func (adapter *Adapter) Detect(_ context.Context, request backend.OpenRequest) b
 	if _, err := adapter.executor.LookPath("wt.exe"); err != nil {
 		return backend.Capability{Backend: adapter.Name(), Available: false, Reason: "wt.exe was not found; install Windows Terminal or choose tmux/shell", Capabilities: []string{}}
 	}
+	if _, _, err := launchPreferences(request.Profile); err != nil {
+		return backend.Capability{Backend: adapter.Name(), Available: false, Reason: err.Error(), Capabilities: []string{}}
+	}
 	requestedProfile := strings.TrimSpace(request.Profile.WindowsTerminalProfile)
-	profiles, known := adapter.profileNames()
-	if requestedProfile != "" && known && !contains(profiles, requestedProfile) {
+	profiles, known := adapter.profiles()
+	if requestedProfile != "" && known && !profiles.contains(requestedProfile) {
 		reason := fmt.Sprintf("Windows Terminal profile %q was not found", requestedProfile)
-		if len(profiles) > 0 {
-			reason += fmt.Sprintf("; available profiles: %s", strings.Join(profiles, ", "))
+		if len(profiles.names) > 0 {
+			reason += fmt.Sprintf("; available profiles: %s", strings.Join(profiles.names, ", "))
 		}
 		reason += "; update windows_terminal_profile or choose tmux/shell"
 		return backend.Capability{Backend: adapter.Name(), Available: false, Reason: reason, Capabilities: []string{}}
 	}
-	return backend.Capability{Backend: adapter.Name(), Available: true, Version: "detected", Capabilities: []string{"open_project", "set_starting_directory", "open_wsl_profile"}}
+	if adapter.env.GOOS != "windows" {
+		if distro := adapter.distro(request); distro == "" {
+			return backend.Capability{
+				Backend: adapter.Name(), Available: false,
+				Reason:       "WSL distribution is unknown; set windows_terminal_distro or WSL_DISTRO_NAME",
+				Capabilities: []string{},
+			}
+		}
+	}
+	return backend.Capability{Backend: adapter.Name(), Available: true, Version: "detected", Capabilities: []string{"open_project", "new_window", "new_tab", "split_pane", "set_starting_directory", "open_wsl_profile"}}
 }
 
 func (adapter *Adapter) OpenProject(ctx context.Context, request backend.OpenRequest) (backend.OpenResult, error) {
@@ -63,17 +76,19 @@ func (adapter *Adapter) OpenProject(ctx context.Context, request backend.OpenReq
 	if err != nil {
 		return adapter.result(request.Project.ID, backend.ProcessResult{}), err
 	}
-	args := []string{"-w", "0", "new-tab"}
+	args, err := LaunchPrefix(request.Profile)
+	if err != nil {
+		return adapter.result(request.Project.ID, backend.ProcessResult{}), err
+	}
 	if profile := strings.TrimSpace(request.Profile.WindowsTerminalProfile); profile != "" {
 		args = append(args, "--profile", profile)
 	}
 	if adapter.env.GOOS == "windows" && request.Project.WindowsWSL == nil {
 		args = append(args, "--startingDirectory", path)
 	} else {
-		distro := adapter.getenv("WSL_DISTRO_NAME")
+		distro := adapter.distro(request)
 		wslPath := path
 		if request.Project.WindowsWSL != nil {
-			distro = request.Project.WindowsWSL.Distro
 			wslPath = request.Project.WindowsWSL.WSLPath
 		}
 		args = append(args, "wsl.exe")
@@ -91,7 +106,17 @@ func (adapter *Adapter) OpenProject(ctx context.Context, request backend.OpenReq
 	return adapter.result(request.Project.ID, process), nil
 }
 
-func (adapter *Adapter) profileNames() ([]string, bool) {
+type profileCatalog struct {
+	names       []string
+	identifiers map[string]struct{}
+}
+
+func (catalog profileCatalog) contains(value string) bool {
+	_, exists := catalog.identifiers[strings.ToLower(strings.TrimSpace(value))]
+	return exists
+}
+
+func (adapter *Adapter) profiles() (profileCatalog, bool) {
 	candidates := []string{}
 	if explicit := strings.TrimSpace(adapter.getenv("WT_SETTINGS_PATH")); explicit != "" {
 		candidates = append(candidates, explicit)
@@ -114,23 +139,32 @@ func (adapter *Adapter) profileNames() ([]string, bool) {
 			Profiles struct {
 				List []struct {
 					Name   string `json:"name"`
+					GUID   string `json:"guid"`
 					Hidden bool   `json:"hidden"`
 				} `json:"list"`
 			} `json:"profiles"`
 		}
 		if err := json.Unmarshal(normalizeJSONC(contents), &settings); err != nil {
-			return []string{}, false
+			return profileCatalog{}, false
 		}
 		names := []string{}
+		identifiers := map[string]struct{}{}
 		for _, profile := range settings.Profiles.List {
-			if !profile.Hidden && profile.Name != "" {
+			if profile.Hidden {
+				continue
+			}
+			if profile.Name != "" {
 				names = append(names, profile.Name)
+				identifiers[strings.ToLower(profile.Name)] = struct{}{}
+			}
+			if profile.GUID != "" {
+				identifiers[strings.ToLower(profile.GUID)] = struct{}{}
 			}
 		}
 		sort.Strings(names)
-		return names, true
+		return profileCatalog{names: names, identifiers: identifiers}, true
 	}
-	return []string{}, false
+	return profileCatalog{}, false
 }
 
 func normalizeJSONC(contents []byte) []byte {
@@ -239,6 +273,16 @@ func (adapter *Adapter) isWSL() bool {
 	return adapter.getenv("WSL_INTEROP") != "" || adapter.getenv("WSL_DISTRO_NAME") != ""
 }
 
+func (adapter *Adapter) distro(request backend.OpenRequest) string {
+	if request.Project.WindowsWSL != nil {
+		return strings.TrimSpace(request.Project.WindowsWSL.Distro)
+	}
+	if distro := strings.TrimSpace(request.Profile.WindowsTerminalDistro); distro != "" {
+		return distro
+	}
+	return strings.TrimSpace(adapter.getenv("WSL_DISTRO_NAME"))
+}
+
 func (adapter *Adapter) getenv(key string) string {
 	if adapter.env.Getenv == nil {
 		return ""
@@ -246,11 +290,42 @@ func (adapter *Adapter) getenv(key string) string {
 	return adapter.env.Getenv(key)
 }
 
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
+func launchPreferences(profile config.Profile) (string, string, error) {
+	window := strings.TrimSpace(profile.WindowsTerminalWindow)
+	if window == "" {
+		window = "last"
 	}
-	return false
+	mode := strings.TrimSpace(profile.WindowsTerminalMode)
+	if mode == "" {
+		mode = "tab"
+	}
+	if !config.ValidWindowsTerminalWindow(window) {
+		return "", "", fmt.Errorf("invalid Windows Terminal window %q", window)
+	}
+	if !config.ValidWindowsTerminalMode(mode) {
+		return "", "", fmt.Errorf("invalid Windows Terminal mode %q", mode)
+	}
+	if !config.ValidWindowsTerminalDistro(profile.WindowsTerminalDistro) {
+		return "", "", fmt.Errorf("invalid Windows Terminal distribution %q", profile.WindowsTerminalDistro)
+	}
+	return window, mode, nil
+}
+
+func LaunchPrefix(profile config.Profile) ([]string, error) {
+	window, mode, err := launchPreferences(profile)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"--window", window}
+	switch mode {
+	case "tab":
+		args = append(args, "new-tab")
+	case "split-auto":
+		args = append(args, "split-pane")
+	case "split-horizontal":
+		args = append(args, "split-pane", "--horizontal")
+	case "split-vertical":
+		args = append(args, "split-pane", "--vertical")
+	}
+	return args, nil
 }

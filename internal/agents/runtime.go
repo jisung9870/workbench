@@ -332,7 +332,10 @@ func (runtime *WindowsTerminalRuntime) Launch(ctx context.Context, request Launc
 	if err != nil {
 		return LaunchResult{ExitCode: -1}, err
 	}
-	args := []string{"-w", "0", "new-tab"}
+	args, err := wtadapter.LaunchPrefix(request.Profile)
+	if err != nil {
+		return LaunchResult{ExitCode: -1}, err
+	}
 	if profile := strings.TrimSpace(request.Profile.WindowsTerminalProfile); profile != "" {
 		args = append(args, "--profile", profile)
 	}
@@ -343,7 +346,10 @@ func (runtime *WindowsTerminalRuntime) Launch(ctx context.Context, request Launc
 			return LaunchResult{ExitCode: -1}, fmt.Errorf("native Windows worktree %q has no explicit WSL path mapping", request.Task.WorktreeID)
 		}
 		args = append(args, "wsl.exe")
-		distro := runtime.get("WSL_DISTRO_NAME")
+		distro := strings.TrimSpace(request.Profile.WindowsTerminalDistro)
+		if distro == "" {
+			distro = runtime.get("WSL_DISTRO_NAME")
+		}
 		wslPath := request.Task.CWD
 		if request.Project.WindowsWSL != nil {
 			distro = request.Project.WindowsWSL.Distro

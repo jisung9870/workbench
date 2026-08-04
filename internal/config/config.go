@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -22,6 +23,9 @@ type Profile struct {
 	DefaultBackend         string `toml:"default_backend"`
 	Editor                 string `toml:"editor"`
 	WindowsTerminalProfile string `toml:"windows_terminal_profile"`
+	WindowsTerminalDistro  string `toml:"windows_terminal_distro"`
+	WindowsTerminalWindow  string `toml:"windows_terminal_window"`
+	WindowsTerminalMode    string `toml:"windows_terminal_mode"`
 }
 
 func DefaultSettings() Settings {
@@ -49,7 +53,10 @@ func LoadSettings(path string) (Settings, error) {
 }
 
 func DefaultProfile() Profile {
-	return Profile{SchemaVersion: SchemaVersion, DefaultBackend: "auto", Editor: "nvim"}
+	return Profile{
+		SchemaVersion: SchemaVersion, DefaultBackend: "auto", Editor: "nvim",
+		WindowsTerminalWindow: "last", WindowsTerminalMode: "tab",
+	}
 }
 
 func LoadProfile(paths Paths, name string) (Profile, error) {
@@ -76,8 +83,23 @@ func LoadProfile(paths Paths, name string) (Profile, error) {
 	if profile.Editor == "" {
 		profile.Editor = "nvim"
 	}
+	if profile.WindowsTerminalWindow == "" {
+		profile.WindowsTerminalWindow = "last"
+	}
+	if profile.WindowsTerminalMode == "" {
+		profile.WindowsTerminalMode = "tab"
+	}
 	if !ValidBackend(profile.DefaultBackend) {
 		return Profile{}, fmt.Errorf("%s: invalid default_backend %q", path, profile.DefaultBackend)
+	}
+	if !ValidWindowsTerminalWindow(profile.WindowsTerminalWindow) {
+		return Profile{}, fmt.Errorf("%s: invalid windows_terminal_window %q", path, profile.WindowsTerminalWindow)
+	}
+	if !ValidWindowsTerminalMode(profile.WindowsTerminalMode) {
+		return Profile{}, fmt.Errorf("%s: invalid windows_terminal_mode %q", path, profile.WindowsTerminalMode)
+	}
+	if !ValidWindowsTerminalDistro(profile.WindowsTerminalDistro) {
+		return Profile{}, fmt.Errorf("%s: invalid windows_terminal_distro %q", path, profile.WindowsTerminalDistro)
 	}
 	return profile, nil
 }
@@ -133,8 +155,56 @@ func Validate(paths Paths) error {
 		if profile.DefaultBackend != "" && !ValidBackend(profile.DefaultBackend) {
 			return fmt.Errorf("%s: invalid default_backend %q", path, profile.DefaultBackend)
 		}
+		if profile.WindowsTerminalWindow != "" && !ValidWindowsTerminalWindow(profile.WindowsTerminalWindow) {
+			return fmt.Errorf("%s: invalid windows_terminal_window %q", path, profile.WindowsTerminalWindow)
+		}
+		if profile.WindowsTerminalMode != "" && !ValidWindowsTerminalMode(profile.WindowsTerminalMode) {
+			return fmt.Errorf("%s: invalid windows_terminal_mode %q", path, profile.WindowsTerminalMode)
+		}
+		if !ValidWindowsTerminalDistro(profile.WindowsTerminalDistro) {
+			return fmt.Errorf("%s: invalid windows_terminal_distro %q", path, profile.WindowsTerminalDistro)
+		}
 	}
 	return nil
+}
+
+func ValidWindowsTerminalWindow(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "last" || value == "new" {
+		return true
+	}
+	if value == "" || strings.HasPrefix(value, "-") {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '_' || character == '-' || character == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func ValidWindowsTerminalMode(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "tab", "split-auto", "split-horizontal", "split-vertical":
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidWindowsTerminalDistro(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed != value || strings.HasPrefix(trimmed, "-") {
+		return false
+	}
+	for _, character := range trimmed {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeExactFile(path string, value any) error {

@@ -78,8 +78,9 @@ schema_version = 1
 active_profile = "personal"
 ```
 
-Profile files support `schema_version`, `default_backend`, `editor`, and
-`windows_terminal_profile`.
+Profile files support `schema_version`, `default_backend`, `editor`,
+`windows_terminal_profile`, `windows_terminal_distro`,
+`windows_terminal_window`, and `windows_terminal_mode`.
 Unknown TOML fields, unsupported schema versions, and parser errors fail
 `wb config validate` instead of being silently ignored.
 
@@ -104,14 +105,24 @@ An explicitly supplied `--id` is the portable identity when project directory
 names differ across machines. Without it, `wb` derives a readable lowercase ID
 from the directory basename and rejects collisions.
 
-An optional active profile can select a backend and Windows Terminal profile:
+An optional active profile can select a backend and machine-local Windows
+Terminal launch preferences:
 
 ```toml
 schema_version = 1
 default_backend = "auto"
 editor = "nvim"
 windows_terminal_profile = "Ubuntu-24.04"
+windows_terminal_distro = "Ubuntu-24.04"
+windows_terminal_window = "last"
+windows_terminal_mode = "tab"
 ```
+
+`windows_terminal_profile` accepts the installed profile name or GUID. Window
+values are `last`, `new`, or a window ID/name. Modes are `tab`, `split-auto`,
+`split-horizontal`, and `split-vertical`. The distro setting is used before
+`WSL_DISTRO_NAME`; an explicit project `windows_wsl.distro` overlay wins over
+both. See [Windows Terminal and WSL](docs/windows-terminal.md).
 
 ## Opening a project
 
@@ -126,6 +137,8 @@ lists usable alternatives.
 wb open terraform-lab
 wb open terraform-lab --backend tmux
 wb open terraform-lab --backend windows-terminal
+wb open terraform-lab --backend windows-terminal --window new
+wb open terraform-lab --backend windows-terminal --window last --terminal-mode split-vertical
 ```
 
 The shell adapter starts the configured interactive shell in the project

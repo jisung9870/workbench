@@ -145,7 +145,7 @@ func TestWindowsTerminalLaunchPreservesProfileAndRegistersLaunchOnlyReference(t 
 		t.Fatalf("unexpected Windows Terminal launch result: %#v ref=%q", result, started)
 	}
 	args := strings.Join(executor.calls[0].Args, "|")
-	if !strings.Contains(args, "--profile|PowerShell") || !strings.Contains(args, `--startingDirectory|C:\work\alpha|C:\bin\claude.exe`) {
+	if !strings.Contains(args, "--window|last|new-tab") || !strings.Contains(args, "--profile|PowerShell") || !strings.Contains(args, `--startingDirectory|C:\work\alpha|C:\bin\claude.exe`) {
 		t.Fatalf("profile or native command was lost: %s", args)
 	}
 }
