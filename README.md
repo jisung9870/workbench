@@ -272,6 +272,18 @@ field is exposed. See [docs/dashboard.md](docs/dashboard.md).
 
 ## Development
 
+Install the current source build into the user environment:
+
+```bash
+make install
+```
+
+The default destination is `~/.local/bin/wb`. Override it when needed:
+
+```bash
+make install WB_INSTALL_DIR="$HOME/bin"
+```
+
 ```bash
 go test ./...
 go vet ./...
