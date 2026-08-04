@@ -36,6 +36,7 @@ wb agents show <task-id> [--json]
 wb agents start <project-id> --agent codex|claude [--worktree <id>] [--backend <backend>]
 wb agents jump <task-id>
 wb agents stop <task-id>
+wb doctor [--profile <name>] [--json] [--strict]
 wb config validate
 wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
 ```
@@ -212,6 +213,29 @@ shell processes and Windows Terminal tabs do not expose a safely reconnectable
 identity, so `jump` and `stop` return capability exit code 3 instead of guessing
 a PID or tab. See [docs/agents.md](docs/agents.md) for the state and ownership
 contract.
+
+## Doctor and capabilities
+
+`wb doctor` checks the Workbench configuration and project/Agent/worktree state
+schemas, required Git and shell capabilities, optional terminal backends,
+binbox, Neovim, Codex, and Claude Code.
+
+```bash
+wb doctor
+wb doctor --json
+wb doctor --profile work --strict
+```
+
+The default mode fails only when a core capability is unavailable. Missing
+optional tools remain visible as warnings. `--strict` also fails on optional
+misses, which is useful for a fully provisioned machine check. JSON failures
+retain the complete capability report in `data` instead of discarding the
+successfully collected checks.
+
+cmux is `disabled/skipped` outside macOS. Windows Terminal is
+`disabled/skipped` outside native Windows and WSL. A platform-disabled backend
+does not become an optional warning or strict-mode failure. See
+[docs/doctor.md](docs/doctor.md) for the schema and recovery contract.
 
 ## Development
 

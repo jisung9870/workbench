@@ -20,6 +20,7 @@ import (
 	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/config"
+	"github.com/jisung9870/workbench/internal/doctor"
 	"github.com/jisung9870/workbench/internal/migrate"
 	"github.com/jisung9870/workbench/internal/output"
 	"github.com/jisung9870/workbench/internal/projects"
@@ -40,6 +41,7 @@ type commandError struct {
 	Code     string
 	Message  string
 	Details  map[string]any
+	Reported bool
 }
 
 func (err *commandError) Error() string { return err.Message }
@@ -68,6 +70,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		commandErr = runWorktrees(args[1:], paths, stdout, stderr)
 	case "agents":
 		commandErr = runAgents(args[1:], paths, stdout, stderr)
+	case "doctor":
+		commandErr = runDoctor(args[1:], paths, stdout, stderr)
 	case "help", "--help", "-h":
 		fmt.Fprint(stdout, usage())
 		return ExitOK
@@ -78,6 +82,91 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return report(stdout, stderr, jsonMode, commandErr)
 	}
 	return ExitOK
+}
+
+func runDoctor(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
+	positionals, options, parseErr := parseOptions(args, map[string]bool{"--profile": true, "--json": false, "--strict": false})
+	if parseErr != nil || len(positionals) != 0 {
+		return invalid("usage: wb doctor [--profile <name>] [--json] [--strict]")
+	}
+	profileName := options["--profile"]
+	if profileName != "" && !config.ValidProfileName(profileName) {
+		return invalid("invalid profile name %q", profileName)
+	}
+	executor := &backend.OSExecutor{Stdin: os.Stdin, Stdout: stdout, Stderr: stderr}
+	environment := backend.CurrentEnvironment()
+	registry := backend.NewRegistry(environment,
+		shelladapter.New(executor, shelladapter.Environment{GOOS: runtime.GOOS, Getenv: os.Getenv}),
+		tmuxadapter.New(executor, os.Getenv),
+		cmuxadapter.New(executor, runtime.GOOS),
+		wtadapter.New(executor, wtadapter.Environment{GOOS: runtime.GOOS, Getenv: os.Getenv}),
+	)
+	report := doctor.NewManager(paths, executor, environment, registry).Run(context.Background(), profileName)
+	_, strict := options["--strict"]
+	_, jsonMode := options["--json"]
+	warnings := report.Warnings()
+	if jsonMode {
+		if report.Healthy(strict) {
+			if err := output.Write(stdout, report, warnings); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		code, message, missing := doctorFailure(report, strict)
+		if err := output.WriteResult(stdout, false, report, warnings, &output.Error{
+			Code: code, Message: message, Details: map[string]any{"capabilities": missing, "strict": strict},
+		}); err != nil {
+			return generalError(err)
+		}
+		return &commandError{ExitCode: ExitGeneral, Code: code, Message: message, Reported: true}
+	}
+
+	fmt.Fprintf(stdout, "Workbench doctor\nplatform: %s\nprofile: %s\n\n", report.Platform, report.Profile)
+	for _, capability := range report.Capabilities {
+		marker := "✓"
+		if capability.Status == doctor.Skipped {
+			marker = "-"
+		} else if capability.Status == doctor.Unavailable {
+			marker = "!"
+			if capability.Scope == doctor.Core {
+				marker = "✗"
+			}
+		}
+		fmt.Fprintf(stdout, "%s %-28s %-8s %s", marker, capability.Name, capability.Scope, capability.Status)
+		if capability.Version != "" {
+			fmt.Fprintf(stdout, " (%s)", capability.Version)
+		}
+		fmt.Fprintln(stdout)
+		if capability.Reason != "" && capability.Status != doctor.Skipped {
+			fmt.Fprintf(stdout, "  reason: %s\n", capability.Reason)
+		}
+		if capability.Recovery != "" && capability.Status == doctor.Unavailable {
+			fmt.Fprintf(stdout, "  recovery: %s\n", capability.Recovery)
+		}
+	}
+	fmt.Fprintf(stdout, "\navailable=%d core_missing=%d optional_missing=%d skipped=%d\n",
+		report.Summary.Available, report.Summary.UnavailableCore, report.Summary.UnavailableOption, report.Summary.Skipped)
+	if report.Healthy(strict) {
+		if report.Summary.UnavailableOption > 0 {
+			fmt.Fprintln(stdout, "core capabilities ready; optional capabilities are unavailable")
+		} else {
+			fmt.Fprintln(stdout, "all checked capabilities ready")
+		}
+		return nil
+	}
+	code, message, missing := doctorFailure(report, strict)
+	return &commandError{ExitCode: ExitGeneral, Code: code, Message: message, Details: map[string]any{"capabilities": missing, "strict": strict}}
+}
+
+func doctorFailure(report doctor.Report, strict bool) (string, string, []string) {
+	if missing := report.Missing(doctor.Core); len(missing) > 0 {
+		return "CORE_CAPABILITY_UNAVAILABLE", "required Workbench capabilities are unavailable", missing
+	}
+	if strict {
+		missing := report.Missing(doctor.Optional)
+		return "OPTIONAL_CAPABILITY_UNAVAILABLE", "optional Workbench capabilities are unavailable in strict mode", missing
+	}
+	return "DOCTOR_FAILED", "Workbench doctor failed", []string{}
 }
 
 func runAgents(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
@@ -602,6 +691,9 @@ func generalError(err error) *commandError {
 }
 
 func report(stdout, stderr io.Writer, jsonMode bool, err *commandError) int {
+	if err.Reported {
+		return err.ExitCode
+	}
 	if jsonMode {
 		_ = output.WriteError(stdout, err.Code, err.Message, err.Details)
 	} else {
@@ -641,6 +733,7 @@ Usage:
   wb agents start <project-id> --agent codex|claude [--worktree <id>] [--backend <backend>]
   wb agents jump <task-id>
   wb agents stop <task-id>
+  wb doctor [--profile <name>] [--json] [--strict]
   wb config validate
   wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
 `

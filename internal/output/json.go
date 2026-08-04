@@ -22,14 +22,19 @@ type Envelope struct {
 }
 
 func Write(w io.Writer, data any, warnings []string) error {
+	return WriteResult(w, true, data, warnings, nil)
+}
+
+func WriteResult(w io.Writer, ok bool, data any, warnings []string, resultError *Error) error {
 	if warnings == nil {
 		warnings = []string{}
 	}
 	return json.NewEncoder(w).Encode(Envelope{
 		SchemaVersion: SchemaVersion,
-		OK:            true,
+		OK:            ok,
 		Data:          data,
 		Warnings:      warnings,
+		Error:         resultError,
 	})
 }
 
@@ -37,15 +42,9 @@ func WriteError(w io.Writer, code, message string, details map[string]any) error
 	if details == nil {
 		details = map[string]any{}
 	}
-	return json.NewEncoder(w).Encode(Envelope{
-		SchemaVersion: SchemaVersion,
-		OK:            false,
-		Data:          nil,
-		Warnings:      []string{},
-		Error: &Error{
-			Code:    code,
-			Message: message,
-			Details: details,
-		},
+	return WriteResult(w, false, nil, []string{}, &Error{
+		Code:    code,
+		Message: message,
+		Details: details,
 	})
 }

@@ -176,3 +176,85 @@ func TestAgentsStopUnknownTaskDoesNotTouchBackend(t *testing.T) {
 		t.Fatalf("missing safe not-found diagnostic: %s", stderr.String())
 	}
 }
+
+func TestDoctorJSONPreservesDataAndStrictFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix executable fixture")
+	}
+	root := t.TempDir()
+	configRoot := filepath.Join(root, "config")
+	stateRoot := filepath.Join(root, "state")
+	binRoot := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gitPath := filepath.Join(binRoot, "git")
+	if err := os.WriteFile(gitPath, []byte("#!/bin/sh\nprintf 'git version fixture\\n'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	t.Setenv("XDG_STATE_HOME", stateRoot)
+	t.Setenv("APPDATA", configRoot)
+	t.Setenv("LOCALAPPDATA", stateRoot)
+	t.Setenv("PATH", binRoot)
+	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("WSL_INTEROP", "")
+	t.Setenv("WSL_DISTRO_NAME", "")
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"doctor", "--json"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("default doctor should tolerate optional misses: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var envelope output.Envelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || !envelope.OK || envelope.Data == nil || len(envelope.Warnings) == 0 {
+		t.Fatalf("unexpected doctor success envelope: %#v err=%v", envelope, err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"doctor", "--json", "--strict"}, &stdout, &stderr); code != ExitGeneral {
+		t.Fatalf("strict doctor should fail on optional misses: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || envelope.OK || envelope.Data == nil || envelope.Error == nil || envelope.Error.Code != "OPTIONAL_CAPABILITY_UNAVAILABLE" {
+		t.Fatalf("strict failure lost collected data: %#v err=%v", envelope, err)
+	}
+}
+
+func TestDoctorInvalidStateIsCoreFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix executable fixture")
+	}
+	root := t.TempDir()
+	configRoot := filepath.Join(root, "config")
+	stateRoot := filepath.Join(root, "state")
+	binRoot := filepath.Join(root, "bin")
+	if err := os.MkdirAll(filepath.Join(stateRoot, "workbench"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(binRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binRoot, "git"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateRoot, "workbench", "agents.json"), []byte(`{"schema_version":99,"tasks":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	t.Setenv("XDG_STATE_HOME", stateRoot)
+	t.Setenv("APPDATA", configRoot)
+	t.Setenv("LOCALAPPDATA", stateRoot)
+	t.Setenv("PATH", binRoot)
+	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("WSL_INTEROP", "")
+	t.Setenv("WSL_DISTRO_NAME", "")
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"doctor", "--json"}, &stdout, &stderr); code != ExitGeneral {
+		t.Fatalf("invalid state should fail doctor: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var envelope output.Envelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || envelope.Error == nil || envelope.Error.Code != "CORE_CAPABILITY_UNAVAILABLE" || envelope.Data == nil {
+		t.Fatalf("core failure envelope lost diagnostics: %#v err=%v", envelope, err)
+	}
+}
