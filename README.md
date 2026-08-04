@@ -37,6 +37,7 @@ wb agents start <project-id> --agent codex|claude [--worktree <id>] [--backend <
 wb agents jump <task-id>
 wb agents stop <task-id>
 wb doctor [--profile <name>] [--json] [--strict]
+wb dashboard [--open auto|cmux|browser|none] [--port <0-65535>]
 wb config validate
 wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
 ```
@@ -249,6 +250,25 @@ cmux is `disabled/skipped` outside macOS. Windows Terminal is
 `disabled/skipped` outside native Windows and WSL. A platform-disabled backend
 does not become an optional warning or strict-mode failure. See
 [docs/doctor.md](docs/doctor.md) for the schema and recovery contract.
+
+## Local Dashboard
+
+`wb dashboard` serves an embedded responsive UI and versioned API on an
+ephemeral loopback port. It remains a foreground process and releases the
+listener when interrupted.
+
+```bash
+wb dashboard
+wb dashboard --open browser
+wb dashboard --open cmux
+wb dashboard --open none --port 0
+```
+
+The Dashboard shows registered projects and Agent tasks, linked worktrees, Git
+change summaries, and Doctor capabilities. Mutations are limited to typed
+project-open and Agent start/jump/stop actions. Cross-origin requests and action
+requests without the per-process token are rejected; no arbitrary shell command
+field is exposed. See [docs/dashboard.md](docs/dashboard.md).
 
 ## Development
 

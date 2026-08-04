@@ -72,6 +72,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		commandErr = runAgents(args[1:], paths, stdout, stderr)
 	case "doctor":
 		commandErr = runDoctor(args[1:], paths, stdout, stderr)
+	case "dashboard":
+		commandErr = runDashboard(args[1:], paths, stdout, stderr)
 	case "help", "--help", "-h":
 		fmt.Fprint(stdout, usage())
 		return ExitOK
@@ -751,6 +753,7 @@ Usage:
   wb agents jump <task-id>
   wb agents stop <task-id>
   wb doctor [--profile <name>] [--json] [--strict]
+  wb dashboard [--open auto|cmux|browser|none] [--port <0-65535>]
   wb config validate
   wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
 `
