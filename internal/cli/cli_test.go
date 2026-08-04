@@ -8,7 +8,11 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jisung9870/workbench/internal/agents"
+	"github.com/jisung9870/workbench/internal/backend"
+	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/output"
 )
 
@@ -113,5 +117,62 @@ func TestConfirmBranchRequiresExactName(t *testing.T) {
 	output.Reset()
 	if !confirmBranch(strings.NewReader("feature/delete\n"), &output, "feature/delete") {
 		t.Fatal("exact branch confirmation was rejected")
+	}
+}
+
+func TestAgentsListJSONUsesRegistryStateSource(t *testing.T) {
+	root := t.TempDir()
+	configRoot := filepath.Join(root, "config")
+	stateRoot := filepath.Join(root, "state")
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	t.Setenv("XDG_STATE_HOME", stateRoot)
+	t.Setenv("APPDATA", configRoot)
+	t.Setenv("LOCALAPPDATA", stateRoot)
+	paths := config.Paths{
+		StateDir:   filepath.Join(stateRoot, "workbench"),
+		AgentsFile: filepath.Join(stateRoot, "workbench", "agents.json"),
+		BackupsDir: filepath.Join(stateRoot, "workbench", "backups"),
+	}
+	now := time.Date(2026, 8, 5, 1, 0, 0, 0, time.UTC)
+	_, err := agents.NewStateStore(paths).Create(agents.Task{
+		ID: "task-cli", ProjectID: "alpha", AgentKind: "codex", Backend: backend.Tmux,
+		BackendRef: "tmux:%2", BackendDetails: map[string]string{"pane": "%2", "session": "alpha"},
+		State: agents.Completed, StateSource: agents.SourceRegistry, CWD: root,
+		StartedAt: now, LastEventAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"agents", "list", "--project", "alpha", "--json"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("agents list failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var envelope struct {
+		SchemaVersion int `json:"schema_version"`
+		OK            bool
+		Data          struct {
+			Agents []agents.Task `json:"agents"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("invalid JSON envelope: %v (%s)", err, stdout.String())
+	}
+	if !envelope.OK || len(envelope.Data.Agents) != 1 || envelope.Data.Agents[0].StateSource != agents.SourceRegistry {
+		t.Fatalf("unexpected agent envelope: %#v", envelope)
+	}
+}
+
+func TestAgentsStopUnknownTaskDoesNotTouchBackend(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"agents", "stop", "task-guessed"}, &stdout, &stderr); code != ExitGeneral {
+		t.Fatalf("expected not-found exit without backend action, got %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "was not found") {
+		t.Fatalf("missing safe not-found diagnostic: %s", stderr.String())
 	}
 }

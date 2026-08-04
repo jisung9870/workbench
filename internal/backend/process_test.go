@@ -22,3 +22,23 @@ func TestOSExecutorPreservesOutputAndExitCode(t *testing.T) {
 		t.Fatalf("process details were lost: %#v", result)
 	}
 }
+
+func TestOSExecutorReportsStartedPID(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture")
+	}
+	startedPID := 0
+	result, err := (&OSExecutor{}).Run(context.Background(), ProcessRequest{
+		Name: "sh", Args: []string{"-c", "exit 0"},
+		Started: func(pid int) error {
+			startedPID = pid
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if startedPID <= 0 || result.PID != startedPID {
+		t.Fatalf("started PID was not preserved: callback=%d result=%#v", startedPID, result)
+	}
+}

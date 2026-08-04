@@ -9,9 +9,9 @@ Detect(ctx, open-request)      availability, version, capabilities, reason
 OpenProject(ctx, request)      command result and backend reference
 ```
 
-Later session and agent slices should add narrow optional interfaces for
-`list_sessions`, `launch_agent`, `jump`, `stop`, and `health`; adapters must not
-claim unsupported capabilities or implement misleading no-op methods.
+Agent runtimes add narrow `Launch`, `Alive`, `Jump`, and `Stop` operations.
+Unsupported operations return a capability error rather than a misleading
+no-op. Session operations remain a later slice.
 
 ## Selection
 
@@ -40,6 +40,11 @@ second terminal or workspace.
   killed by an arbitrary timeout.
 - Captured stdout, stderr, exit code, command array, and a backend-specific
   reference are retained on failure.
+- Agent launch callbacks persist backend ownership immediately after the child
+  process, tmux pane, cmux workspace, or Windows Terminal launch is created.
+- tmux and cmux revalidate their exact registered target before a destructive
+  stop. Shell PIDs and Windows Terminal launch-only references are never used
+  for guessed termination.
 
 References currently use `shell:<project-id>`, `tmux:<project-id>`,
 `cmux:<project-id>`, and `windows-terminal:<project-id>`.

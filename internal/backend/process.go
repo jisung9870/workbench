@@ -13,6 +13,7 @@ type ProcessRequest struct {
 	Name        string
 	Args        []string
 	Interactive bool
+	Started     func(pid int) error
 }
 
 type ProcessResult struct {
@@ -20,6 +21,7 @@ type ProcessResult struct {
 	ExitCode int
 	Stdout   string
 	Stderr   string
+	PID      int
 }
 
 type Executor interface {
@@ -51,7 +53,23 @@ func (executor *OSExecutor) Run(ctx context.Context, request ProcessRequest) (Pr
 		command.Stdout = &stdout
 		command.Stderr = &stderr
 	}
-	err := command.Run()
+	err := command.Start()
+	if err == nil {
+		result.PID = command.Process.Pid
+		if request.Started != nil {
+			if startErr := request.Started(result.PID); startErr != nil {
+				_ = command.Process.Kill()
+				_ = command.Wait()
+				result.Stdout = stdout.String()
+				result.Stderr = stderr.String()
+				if command.ProcessState != nil {
+					result.ExitCode = command.ProcessState.ExitCode()
+				}
+				return result, startErr
+			}
+		}
+		err = command.Wait()
+	}
 	result.Stdout = stdout.String()
 	result.Stderr = stderr.String()
 	if command.ProcessState != nil {

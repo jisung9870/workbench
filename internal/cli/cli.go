@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	cmuxadapter "github.com/jisung9870/workbench/adapters/cmux"
 	gitadapter "github.com/jisung9870/workbench/adapters/git"
 	shelladapter "github.com/jisung9870/workbench/adapters/shell"
 	tmuxadapter "github.com/jisung9870/workbench/adapters/tmux"
 	wtadapter "github.com/jisung9870/workbench/adapters/windows_terminal"
+	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/migrate"
@@ -64,6 +66,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		commandErr = runOpen(args[1:], paths, stdout, stderr)
 	case "worktrees":
 		commandErr = runWorktrees(args[1:], paths, stdout, stderr)
+	case "agents":
+		commandErr = runAgents(args[1:], paths, stdout, stderr)
 	case "help", "--help", "-h":
 		fmt.Fprint(stdout, usage())
 		return ExitOK
@@ -74,6 +78,146 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return report(stdout, stderr, jsonMode, commandErr)
 	}
 	return ExitOK
+}
+
+func runAgents(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
+	if len(args) == 0 {
+		return invalid("agents subcommand is required")
+	}
+	manager := newAgentManager(paths, stdout, stderr)
+	ctx := context.Background()
+	switch args[0] {
+	case "list":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--project": true, "--json": false})
+		if parseErr != nil || len(positionals) != 0 {
+			return invalid("usage: wb agents list [--project <id>] [--json]")
+		}
+		tasks, warnings, err := manager.List(ctx, options["--project"])
+		if err != nil {
+			return agentError(err)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"agents": tasks}, warnings); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		for _, warning := range warnings {
+			fmt.Fprintf(stderr, "warning: %s\n", warning)
+		}
+		for _, task := range tasks {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", task.ID, task.ProjectID, task.AgentKind, task.Backend, task.State, task.CWD)
+		}
+		return nil
+	case "show":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) != 1 {
+			return invalid("usage: wb agents show <task-id> [--json]")
+		}
+		task, warnings, err := manager.Show(ctx, positionals[0])
+		if err != nil {
+			return agentError(err)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"agent": task}, warnings); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		for _, warning := range warnings {
+			fmt.Fprintf(stderr, "warning: %s\n", warning)
+		}
+		fmt.Fprintf(stdout, "id: %s\nproject_id: %s\nworktree_id: %s\nagent_kind: %s\nbackend: %s\nbackend_ref: %s\nstate: %s\nstate_source: %s\ncwd: %s\nstarted_at: %s\nlast_event_at: %s\n",
+			task.ID, task.ProjectID, task.WorktreeID, task.AgentKind, task.Backend, task.BackendRef, task.State, task.StateSource, task.CWD, task.StartedAt.Format(time.RFC3339), task.LastEventAt.Format(time.RFC3339))
+		return nil
+	case "start":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--agent": true, "--worktree": true, "--backend": true})
+		if parseErr != nil || len(positionals) != 1 || options["--agent"] == "" {
+			return invalid("usage: wb agents start <project-id> --agent codex|claude [--worktree <id>] [--backend <backend>]")
+		}
+		requested := backend.Auto
+		if value := options["--backend"]; value != "" {
+			parsed, err := backend.ParseName(value)
+			if err != nil {
+				return invalid("%s", err)
+			}
+			requested = parsed
+		}
+		task, backups, err := manager.Start(ctx, agents.StartRequest{ProjectID: positionals[0], WorktreeID: options["--worktree"], AgentKind: options["--agent"], Backend: requested})
+		if err != nil {
+			return agentError(err)
+		}
+		fmt.Fprintf(stdout, "%s %s\t%s\t%s\t%s\n", task.State, task.ID, task.AgentKind, task.Backend, task.CWD)
+		for _, backup := range backups {
+			fmt.Fprintf(stdout, "backup %s\n", backup)
+		}
+		return nil
+	case "jump":
+		if len(args) != 2 || strings.HasPrefix(args[1], "-") {
+			return invalid("usage: wb agents jump <task-id>")
+		}
+		task, err := manager.Jump(ctx, args[1])
+		if err != nil {
+			return agentError(err)
+		}
+		fmt.Fprintf(stdout, "jumped to %s with %s\n", task.ID, task.Backend)
+		return nil
+	case "stop":
+		if len(args) != 2 || strings.HasPrefix(args[1], "-") {
+			return invalid("usage: wb agents stop <task-id>")
+		}
+		task, backups, err := manager.Stop(ctx, args[1])
+		if err != nil {
+			return agentError(err)
+		}
+		fmt.Fprintf(stdout, "stopped %s with %s\n", task.ID, task.Backend)
+		for _, backup := range backups {
+			fmt.Fprintf(stdout, "backup %s\n", backup)
+		}
+		return nil
+	default:
+		return invalid("unknown agents subcommand %q", args[0])
+	}
+}
+
+func newAgentManager(paths config.Paths, stdout, stderr io.Writer) *agents.Manager {
+	executor := &backend.OSExecutor{Stdin: os.Stdin, Stdout: stdout, Stderr: stderr}
+	projectStore := projects.NewStore(paths)
+	worktreeManager := worktrees.NewManager(projectStore, worktrees.NewStateStore(paths), gitadapter.New(executor))
+	environment := backend.CurrentEnvironment()
+	return agents.NewManager(paths, projectStore, worktreeManager, agents.NewStateStore(paths), executor, environment,
+		agents.NewShellRuntime(executor),
+		agents.NewTmuxRuntime(executor, os.Getenv),
+		agents.NewCMUXRuntime(executor, runtime.GOOS),
+		agents.NewWindowsTerminalRuntime(executor, runtime.GOOS, os.Getenv),
+	)
+}
+
+func agentError(err error) *commandError {
+	var invalidErr *agents.InvalidError
+	if errors.As(err, &invalidErr) {
+		return &commandError{ExitCode: ExitArgument, Code: "INVALID_ARGUMENT", Message: invalidErr.Error()}
+	}
+	var notFoundErr *agents.NotFoundError
+	if errors.As(err, &notFoundErr) {
+		return &commandError{ExitCode: ExitGeneral, Code: "AGENT_NOT_FOUND", Message: notFoundErr.Error()}
+	}
+	var conflictErr *agents.ConflictError
+	var worktreeConflict *worktrees.ConflictError
+	var unsafeErr *agents.UnsafeError
+	if errors.As(err, &conflictErr) || errors.As(err, &worktreeConflict) || errors.As(err, &unsafeErr) {
+		return &commandError{ExitCode: ExitConflict, Code: "UNSAFE_AGENT_STATE", Message: err.Error()}
+	}
+	var unavailableErr *backend.UnavailableError
+	var unsupportedErr *agents.UnsupportedError
+	if errors.As(err, &unavailableErr) || errors.As(err, &unsupportedErr) {
+		return &commandError{ExitCode: ExitUnavailable, Code: "BACKEND_UNAVAILABLE", Message: err.Error()}
+	}
+	var partialErr *agents.PartialError
+	if errors.As(err, &partialErr) {
+		return &commandError{ExitCode: ExitPartial, Code: "PARTIAL_RESULT", Message: partialErr.Error(), Details: map[string]any{"agent": partialErr.Task, "backups": partialErr.Backups}}
+	}
+	return generalError(err)
 }
 
 func runWorktrees(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
@@ -492,6 +636,11 @@ Usage:
   wb worktrees list <project-id> [--json]
   wb worktrees create <project-id> <branch> [--base <ref>]
   wb worktrees remove <worktree-id> [--delete-branch]
+  wb agents list [--project <id>] [--json]
+  wb agents show <task-id> [--json]
+  wb agents start <project-id> --agent codex|claude [--worktree <id>] [--backend <backend>]
+  wb agents jump <task-id>
+  wb agents stop <task-id>
   wb config validate
   wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
 `

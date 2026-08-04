@@ -20,7 +20,7 @@ locations needed by `wb config validate`.
 Remote repository creation and publishing are intentionally deferred. The
 module path reserves the planned GitHub location.
 
-## Slice 2A commands
+## Implemented commands
 
 ```text
 wb projects list [--json]
@@ -31,6 +31,11 @@ wb open <id> [--backend auto|cmux|windows-terminal|tmux|shell]
 wb worktrees list <project-id> [--json]
 wb worktrees create <project-id> <branch> [--base <ref>]
 wb worktrees remove <worktree-id> [--delete-branch]
+wb agents list [--project <id>] [--json]
+wb agents show <task-id> [--json]
+wb agents start <project-id> --agent codex|claude [--worktree <id>] [--backend <backend>]
+wb agents jump <task-id>
+wb agents stop <task-id>
 wb config validate
 wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
 ```
@@ -50,6 +55,7 @@ ${XDG_CONFIG_HOME:-~/.config}/workbench/projects.toml
 ${XDG_CONFIG_HOME:-~/.config}/workbench/profiles/*.toml
 ${XDG_STATE_HOME:-~/.local/state}/workbench/backups/
 ${XDG_STATE_HOME:-~/.local/state}/workbench/worktrees.json
+${XDG_STATE_HOME:-~/.local/state}/workbench/agents.json
 ```
 
 Native Windows uses `%APPDATA%\workbench` for configuration and
@@ -181,6 +187,31 @@ wb migrate sessionizer --apply
 
 `--check` performs no writes. `--apply` backs up the legacy source before
 writing the project registry; reruns skip canonical paths already registered.
+
+## Agent tasks
+
+`wb agents start` accepts only the fixed `codex` and `claude` executable names.
+It writes a schema-v1 `starting` task before launching anything and records the
+backend reference as soon as a process, tmux pane, cmux workspace, or Windows
+Terminal tab launch is created. Registry-derived tasks always use
+`state_source=registry`; legacy pane observations remain separate as
+`legacy:*` / `state_source=scrape` records.
+
+```bash
+wb agents start alpha --agent codex --backend tmux
+wb agents start alpha --agent claude --worktree wt-alpha-feature-api-1a2b3c4d
+wb agents list --project alpha --json
+wb agents jump task-19c...
+wb agents stop task-19c...
+```
+
+Tmux panes carry an exact `@workbench_task_id`, which is reread before jump or
+stop. A cmux task owns a newly created workspace and its reference must still
+appear in `cmux list-workspaces --json` before selection or closure. Attached
+shell processes and Windows Terminal tabs do not expose a safely reconnectable
+identity, so `jump` and `stop` return capability exit code 3 instead of guessing
+a PID or tab. See [docs/agents.md](docs/agents.md) for the state and ownership
+contract.
 
 ## Development
 

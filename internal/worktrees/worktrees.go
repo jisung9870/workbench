@@ -139,6 +139,29 @@ func (manager *Manager) List(ctx context.Context, projectID string) ([]Item, err
 	return items, nil
 }
 
+// Resolve returns a managed worktree only after re-reading git's current
+// porcelain state. Agent launches use this to avoid starting in a stale,
+// prunable, or drifted registry path.
+func (manager *Manager) Resolve(ctx context.Context, projectID, id string) (Item, error) {
+	items, err := manager.List(ctx, projectID)
+	if err != nil {
+		return Item{}, err
+	}
+	for _, item := range items {
+		if item.ID != id {
+			continue
+		}
+		if !item.Managed {
+			return Item{}, &ConflictError{Message: fmt.Sprintf("worktree %q is not managed by Workbench", id)}
+		}
+		if item.Drifted || item.Prunable {
+			return Item{}, &ConflictError{Message: fmt.Sprintf("worktree %q is drifted or prunable", id)}
+		}
+		return item, nil
+	}
+	return Item{}, &ConflictError{Message: fmt.Sprintf("worktree %q was not found for project %q", id, projectID)}
+}
+
 func (manager *Manager) Create(ctx context.Context, projectID, branch, base string) (Item, error) {
 	project, repository, err := manager.project(ctx, projectID)
 	if err != nil {
