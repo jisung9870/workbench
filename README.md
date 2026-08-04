@@ -28,6 +28,9 @@ wb projects show <id> [--json]
 wb projects add <path> [--id <id>] [--profile <profile>]
 wb projects remove <id>
 wb open <id> [--backend auto|cmux|windows-terminal|tmux|shell]
+wb worktrees list <project-id> [--json]
+wb worktrees create <project-id> <branch> [--base <ref>]
+wb worktrees remove <worktree-id> [--delete-branch]
 wb config validate
 wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
 ```
@@ -46,6 +49,7 @@ ${XDG_CONFIG_HOME:-~/.config}/workbench/config.toml
 ${XDG_CONFIG_HOME:-~/.config}/workbench/projects.toml
 ${XDG_CONFIG_HOME:-~/.config}/workbench/profiles/*.toml
 ${XDG_STATE_HOME:-~/.local/state}/workbench/backups/
+${XDG_STATE_HOME:-~/.local/state}/workbench/worktrees.json
 ```
 
 Native Windows uses `%APPDATA%\workbench` for configuration and
@@ -133,6 +137,33 @@ External processes are invoked as argument arrays. Launch timeout, exit code,
 stdout, stderr, command arguments, and backend reference are retained in the
 result or error. Interactive shell/tmux sessions intentionally have no launch
 timeout because their lifetime is controlled by the user.
+
+## Worktrees
+
+Workbench creates linked worktrees outside the main repository at:
+
+```text
+<repo-parent>/.worktrees/<project-id>/<stable-worktree-id>
+```
+
+The ID is deterministically derived from the stable project ID and branch, for
+example `wt-alpha-feature-api-1a2b3c4d`. Git porcelain remains authoritative;
+`worktrees.json` records stable IDs only for worktrees created by `wb`.
+Externally created worktrees are visible as `managed=false` but cannot be
+removed through Workbench.
+
+```bash
+wb worktrees create alpha feature/api --base main
+wb worktrees list alpha --json
+wb worktrees remove wt-alpha-feature-api-1a2b3c4d
+```
+
+Creation rejects a branch already checked out in any worktree. Removal rereads
+`git worktree list --porcelain -z`, verifies the registered path and branch,
+rejects locked or dirty worktrees, and uses `git worktree remove` without
+`--force`. The branch is preserved by default. `--delete-branch` additionally
+requires typing the exact branch name and uses safe `git branch -d`; an unmerged
+branch therefore remains rather than being forced away.
 
 ## Sessionizer migration
 

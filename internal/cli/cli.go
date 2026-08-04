@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	cmuxadapter "github.com/jisung9870/workbench/adapters/cmux"
+	gitadapter "github.com/jisung9870/workbench/adapters/git"
 	shelladapter "github.com/jisung9870/workbench/adapters/shell"
 	tmuxadapter "github.com/jisung9870/workbench/adapters/tmux"
 	wtadapter "github.com/jisung9870/workbench/adapters/windows_terminal"
@@ -19,6 +21,7 @@ import (
 	"github.com/jisung9870/workbench/internal/migrate"
 	"github.com/jisung9870/workbench/internal/output"
 	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/worktrees"
 )
 
 const (
@@ -27,6 +30,7 @@ const (
 	ExitArgument    = 2
 	ExitUnavailable = 3
 	ExitConflict    = 4
+	ExitPartial     = 5
 )
 
 type commandError struct {
@@ -58,6 +62,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		commandErr = runMigrate(args[1:], paths, stdout, stderr)
 	case "open":
 		commandErr = runOpen(args[1:], paths, stdout, stderr)
+	case "worktrees":
+		commandErr = runWorktrees(args[1:], paths, stdout, stderr)
 	case "help", "--help", "-h":
 		fmt.Fprint(stdout, usage())
 		return ExitOK
@@ -68,6 +74,118 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return report(stdout, stderr, jsonMode, commandErr)
 	}
 	return ExitOK
+}
+
+func runWorktrees(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
+	if len(args) == 0 {
+		return invalid("worktrees subcommand is required")
+	}
+	executor := &backend.OSExecutor{Stdin: os.Stdin, Stdout: stdout, Stderr: stderr}
+	manager := worktrees.NewManager(
+		projects.NewStore(paths),
+		worktrees.NewStateStore(paths),
+		gitadapter.New(executor),
+	)
+	switch args[0] {
+	case "list":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) != 1 {
+			return invalid("usage: wb worktrees list <project-id> [--json]")
+		}
+		items, err := manager.List(context.Background(), positionals[0])
+		if err != nil {
+			return worktreeError(err, stderr)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"worktrees": items}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		for _, item := range items {
+			state := "clean"
+			if item.Dirty {
+				state = "dirty"
+			}
+			ownership := "external"
+			if item.Managed {
+				ownership = "managed"
+			}
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", item.ID, item.Branch, state, ownership, item.Path)
+		}
+		return nil
+	case "create":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--base": true})
+		if parseErr != nil || len(positionals) != 2 {
+			return invalid("usage: wb worktrees create <project-id> <branch> [--base <ref>]")
+		}
+		item, err := manager.Create(context.Background(), positionals[0], positionals[1], options["--base"])
+		if err != nil {
+			return worktreeError(err, stderr)
+		}
+		fmt.Fprintf(stdout, "created %s\t%s\t%s\n", item.ID, item.Branch, item.Path)
+		return nil
+	case "remove":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--delete-branch": false})
+		if parseErr != nil || len(positionals) != 1 {
+			return invalid("usage: wb worktrees remove <worktree-id> [--delete-branch]")
+		}
+		_, deleteBranch := options["--delete-branch"]
+		item, backups, err := manager.Remove(context.Background(), positionals[0], worktrees.RemoveOptions{
+			DeleteBranch: deleteBranch,
+			Confirm: func(branch string) bool {
+				return confirmBranch(os.Stdin, stderr, branch)
+			},
+		})
+		if err != nil {
+			return worktreeError(err, stderr)
+		}
+		fmt.Fprintf(stdout, "removed %s\t%s\n", item.ID, item.Path)
+		if deleteBranch {
+			fmt.Fprintf(stdout, "deleted branch %s\n", item.Branch)
+		}
+		for _, backup := range backups {
+			fmt.Fprintf(stdout, "backup %s\n", backup)
+		}
+		return nil
+	default:
+		return invalid("unknown worktrees subcommand %q", args[0])
+	}
+}
+
+func confirmBranch(reader io.Reader, writer io.Writer, branch string) bool {
+	fmt.Fprintf(writer, "type branch name %q to confirm worktree and branch deletion: ", branch)
+	scanner := bufio.NewScanner(reader)
+	if !scanner.Scan() {
+		return false
+	}
+	return strings.TrimSpace(scanner.Text()) == branch
+}
+
+func worktreeError(err error, stderr io.Writer) *commandError {
+	var commandErr *gitadapter.CommandError
+	if errors.As(err, &commandErr) && commandErr.Result.Stderr != "" {
+		fmt.Fprint(stderr, commandErr.Result.Stderr)
+		if !strings.HasSuffix(commandErr.Result.Stderr, "\n") {
+			fmt.Fprintln(stderr)
+		}
+	}
+	var invalidErr *worktrees.InvalidError
+	if errors.As(err, &invalidErr) {
+		return &commandError{ExitCode: ExitArgument, Code: "INVALID_ARGUMENT", Message: invalidErr.Error()}
+	}
+	var conflictErr *worktrees.ConflictError
+	if errors.As(err, &conflictErr) {
+		return &commandError{ExitCode: ExitConflict, Code: "WORKTREE_CONFLICT", Message: conflictErr.Error()}
+	}
+	var partialErr *worktrees.PartialError
+	if errors.As(err, &partialErr) {
+		return &commandError{
+			ExitCode: ExitPartial, Code: "PARTIAL_RESULT", Message: partialErr.Error(),
+			Details: map[string]any{"worktree": partialErr.Item, "backups": partialErr.Backups},
+		}
+	}
+	return generalError(err)
 }
 
 func runOpen(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
@@ -371,6 +489,9 @@ Usage:
   wb projects add <path> [--id <id>] [--profile <profile>]
   wb projects remove <id>
   wb open <project-id> [--backend auto|cmux|windows-terminal|tmux|shell]
+  wb worktrees list <project-id> [--json]
+  wb worktrees create <project-id> <branch> [--base <ref>]
+  wb worktrees remove <worktree-id> [--delete-branch]
   wb config validate
   wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
 `

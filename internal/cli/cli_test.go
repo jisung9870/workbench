@@ -104,3 +104,14 @@ func TestOpenShellPreservesBackendExit(t *testing.T) {
 		t.Fatalf("backend reference was lost: %s", stderr.String())
 	}
 }
+
+func TestConfirmBranchRequiresExactName(t *testing.T) {
+	var output bytes.Buffer
+	if confirmBranch(strings.NewReader("wrong\n"), &output, "feature/delete") {
+		t.Fatal("wrong branch confirmation was accepted")
+	}
+	output.Reset()
+	if !confirmBranch(strings.NewReader("feature/delete\n"), &output, "feature/delete") {
+		t.Fatal("exact branch confirmation was rejected")
+	}
+}
