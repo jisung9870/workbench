@@ -1,2 +1,6 @@
 /wb
 /coverage.out
+
+# Local agent/runtime state
+/.omc/
+/.omx/
