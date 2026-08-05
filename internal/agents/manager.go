@@ -219,7 +219,7 @@ func (manager *Manager) Jump(ctx context.Context, id string) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	if !active(task.State) {
+	if !IsActiveState(task.State) {
 		return task, &ConflictError{Message: fmt.Sprintf("agent task %q is %s", id, task.State)}
 	}
 	agentRuntime, exists := manager.runtimes[task.Backend]
@@ -237,7 +237,7 @@ func (manager *Manager) Stop(ctx context.Context, id string) (Task, []string, er
 	if !found {
 		return Task{}, nil, &NotFoundError{Message: fmt.Sprintf("agent task %q was not found", id)}
 	}
-	if !active(task.State) {
+	if !IsActiveState(task.State) {
 		return task, nil, &ConflictError{Message: fmt.Sprintf("agent task %q is %s", id, task.State)}
 	}
 	if task.BackendRef == "" {
@@ -261,7 +261,7 @@ func (manager *Manager) Stop(ctx context.Context, id string) (Task, []string, er
 }
 
 func (manager *Manager) reconcile(ctx context.Context, task Task) (Task, string, error) {
-	if !active(task.State) || task.State == Starting {
+	if !IsActiveState(task.State) || task.State == Starting {
 		return task, "", nil
 	}
 	agentRuntime, exists := manager.runtimes[task.Backend]
@@ -287,10 +287,6 @@ func (manager *Manager) reconcile(ctx context.Context, task Task) (Task, string,
 		return nil
 	})
 	return updated, "", err
-}
-
-func active(state State) bool {
-	return state == Starting || state == Running || state == Waiting || state == Idle
 }
 
 func nonEmpty(value string) []string {

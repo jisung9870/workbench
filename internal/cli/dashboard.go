@@ -99,6 +99,14 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 	if err != nil {
 		return dashboard.Snapshot{}, err
 	}
+	dashboardAgents := make([]dashboard.AgentTask, 0, len(agentItems))
+	for _, task := range agentItems {
+		lifecycle := "terminal"
+		if agents.IsActiveState(task.State) {
+			lifecycle = "active"
+		}
+		dashboardAgents = append(dashboardAgents, dashboard.AgentTask{Task: task, Lifecycle: lifecycle})
+	}
 	worktreeManager := worktrees.NewManager(projectStore, worktrees.NewStateStore(service.paths), gitadapter.New(executor))
 	worktreeItems := []worktrees.Item{}
 	changes := make([]dashboard.ChangeSummary, 0, len(projectItems))
@@ -114,7 +122,7 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 	sort.Strings(warnings)
 	return dashboard.Snapshot{
 		GeneratedAt: time.Now().UTC(), Platform: doctorReport.Platform, Profile: doctorReport.Profile,
-		Projects: projectItems, Agents: agentItems, Worktrees: worktreeItems, Changes: changes,
+		AgentRegistryPath: service.paths.AgentsFile, Projects: projectItems, Agents: dashboardAgents, Worktrees: worktreeItems, Changes: changes,
 		Doctor: doctorReport, Warnings: warnings,
 	}, nil
 }
@@ -124,7 +132,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 	case "open_project":
 		return service.openProject(ctx, request)
 	case "start_agent":
-		if request.ProjectID == "" || request.TaskID != "" || request.AgentKind == "" {
+		if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind == "" {
 			return dashboard.ActionResult{}, dashboardInvalid("start_agent requires project_id and agent_kind")
 		}
 		requested, err := service.agentBackend(ctx, request.ProjectID, request.Backend)
@@ -138,7 +146,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 		}
 		return dashboard.ActionResult{Message: fmt.Sprintf("started %s task %s", task.AgentKind, task.ID)}, nil
 	case "jump_agent":
-		if request.TaskID == "" || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" {
+		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("jump_agent requires only task_id")
 		}
 		task, jumpErr := newAgentManager(service.paths, io.Discard, io.Discard).Jump(ctx, request.TaskID)
@@ -147,7 +155,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 		}
 		return dashboard.ActionResult{Message: fmt.Sprintf("jumped to %s with %s", task.ID, task.Backend)}, nil
 	case "stop_agent":
-		if request.TaskID == "" || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" {
+		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("stop_agent requires only task_id")
 		}
 		task, _, stopErr := newAgentManager(service.paths, io.Discard, io.Discard).Stop(ctx, request.TaskID)
@@ -155,13 +163,27 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 			return dashboard.ActionResult{}, dashboardCommandError(agentError(stopErr))
 		}
 		return dashboard.ActionResult{Message: fmt.Sprintf("stopped task %s", task.ID)}, nil
+	case "clear_agent_history":
+		if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) == 0 || request.AgentKind != "" || request.Backend != "" {
+			return dashboard.ActionResult{}, dashboardInvalid("clear_agent_history requires project_id and task_ids")
+		}
+		if _, found, projectErr := projects.NewStore(service.paths).Show(request.ProjectID); projectErr != nil {
+			return dashboard.ActionResult{}, dashboardCommandError(configError(projectErr))
+		} else if !found {
+			return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusNotFound, Code: "PROJECT_NOT_FOUND", Message: fmt.Sprintf("project %q was not found", request.ProjectID)}
+		}
+		removed, backup, pruneErr := agents.NewStateStore(service.paths).PruneTerminal(request.ProjectID, request.TaskIDs)
+		if pruneErr != nil {
+			return dashboard.ActionResult{}, dashboardCommandError(agentError(pruneErr))
+		}
+		return dashboard.ActionResult{Message: fmt.Sprintf("cleared %d terminal task records for %s; backup %s", removed, request.ProjectID, backup)}, nil
 	default:
 		return dashboard.ActionResult{}, dashboardInvalid(fmt.Sprintf("unknown dashboard action %q", request.Action))
 	}
 }
 
 func (service *dashboardService) openProject(ctx context.Context, request dashboard.ActionRequest) (dashboard.ActionResult, error) {
-	if request.ProjectID == "" || request.TaskID != "" || request.AgentKind != "" {
+	if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" {
 		return dashboard.ActionResult{}, dashboardInvalid("open_project requires project_id and optional backend")
 	}
 	project, found, err := projects.NewStore(service.paths).Show(request.ProjectID)

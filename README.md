@@ -236,6 +236,14 @@ wb agents jump task-19c...
 wb agents stop task-19c...
 ```
 
+Agent lifecycle records are stored in
+`${XDG_STATE_HOME:-~/.local/state}/workbench/agents.json` on Unix/WSL and
+`%LOCALAPPDATA%\workbench\agents.json` on native Windows. The Dashboard shows
+the resolved path, separates active tasks from terminal history, and can clear
+only the exact selected-project terminal records shown at confirmation time.
+The previous registry is preserved under the Workbench `backups/` directory,
+and the Dashboard success notice reports the recovery path.
+
 Tmux panes carry an exact `@workbench_task_id`, which is reread before jump or
 stop. A cmux task owns a newly created workspace and its reference must still
 appear in `cmux list-workspaces --json` before selection or closure. Attached

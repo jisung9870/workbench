@@ -28,7 +28,7 @@ func (service *fakeService) Execute(_ context.Context, request ActionRequest) (A
 }
 
 func TestHandlerServesVersionedSnapshotWithSecurityHeaders(t *testing.T) {
-	handler, err := NewHandler(&fakeService{snapshot: Snapshot{Platform: "linux", Profile: "personal"}}, "secret")
+	handler, err := NewHandler(&fakeService{snapshot: Snapshot{Platform: "linux", Profile: "personal", Agents: []AgentTask{{Lifecycle: "terminal"}}}}, "secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +47,9 @@ func TestHandlerServesVersionedSnapshotWithSecurityHeaders(t *testing.T) {
 	if !envelope.OK || envelope.SchemaVersion != 1 {
 		t.Fatalf("unexpected envelope: %#v", envelope)
 	}
+	if !strings.Contains(response.Body.String(), `"lifecycle":"terminal"`) {
+		t.Fatalf("snapshot omitted server-owned lifecycle classification: %s", response.Body.String())
+	}
 }
 
 func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
@@ -59,8 +62,9 @@ func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
 		contentType string
 		contains    []string
 	}{
-		{path: "/", contentType: "text/html", contains: []string{`id="theme-select"`, `href="/guide"`, `/assets/theme.js`}},
+		{path: "/", contentType: "text/html", contains: []string{`id="theme-select"`, `href="/guide"`, `/assets/theme.js`, `id="agent-history"`, `id="agent-registry-path"`, `id="clear-agent-history"`, `id="task-terminal-note"`}},
 		{path: "/guide", contentType: "text/html", contains: []string{`id="guide-search"`, `id="architecture"`, `id="cli-reference"`, `id="troubleshooting"`, `/assets/dashboard-overview-light.jpg`, `alt="Workbench Dashboard 화면 구성`}},
+		{path: "/assets/app.js", contentType: "text/javascript", contains: []string{`task.lifecycle === "active"`, `clear_agent_history`, `agent_registry_path`, `task-terminal-note`}},
 		{path: "/assets/theme.js", contentType: "text/javascript", contains: []string{"workbench.dashboard.theme.v1", "localStorage"}},
 		{path: "/assets/guide.js", contentType: "text/javascript", contains: []string{"guide-search", "IntersectionObserver"}},
 		{path: "/assets/dashboard-overview-light.jpg", contentType: "image/jpeg"},

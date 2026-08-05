@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/dashboard"
@@ -32,6 +36,66 @@ func TestDashboardServiceRejectsUnknownAction(t *testing.T) {
 	var actionErr *dashboard.ActionError
 	if !errors.As(err, &actionErr) || actionErr.Code != "INVALID_ACTION" {
 		t.Fatalf("unexpected action error: %v", err)
+	}
+}
+
+func TestDashboardClearAgentHistoryPrunesOnlyTerminalTasks(t *testing.T) {
+	root := t.TempDir()
+	paths := config.Paths{StateDir: root, AgentsFile: filepath.Join(root, "agents.json"), BackupsDir: filepath.Join(root, "backups"), ProjectsFile: filepath.Join(root, "projects.toml")}
+	if _, _, err := projects.NewStore(paths).Add(root, "alpha", "personal"); err != nil {
+		t.Fatal(err)
+	}
+	store := agents.NewStateStore(paths)
+	now := time.Date(2026, 8, 5, 1, 0, 0, 0, time.UTC)
+	for _, task := range []agents.Task{
+		{ID: "task-running", ProjectID: "alpha", AgentKind: "codex", Backend: backend.Tmux, BackendRef: "tmux:%1", State: agents.Running, StateSource: agents.SourceRegistry, CWD: root, StartedAt: now, LastEventAt: now},
+		{ID: "task-stopped", ProjectID: "alpha", AgentKind: "codex", Backend: backend.Tmux, BackendRef: "tmux:%2", State: agents.Stopped, StateSource: agents.SourceRegistry, CWD: root, StartedAt: now, LastEventAt: now},
+	} {
+		if _, err := store.Create(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := (&dashboardService{paths: paths}).Execute(context.Background(), dashboard.ActionRequest{Action: "clear_agent_history", ProjectID: "alpha", TaskIDs: []string{"task-stopped"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Message, "cleared 1 terminal task records") || !strings.Contains(result.Message, "backup ") {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	tasks, err := store.List("alpha")
+	if err != nil || len(tasks) != 1 || tasks[0].ID != "task-running" {
+		t.Fatalf("unexpected remaining tasks: %#v err=%v", tasks, err)
+	}
+}
+
+func TestDashboardClearAgentHistoryRejectsMixedActionFields(t *testing.T) {
+	_, err := (&dashboardService{}).Execute(context.Background(), dashboard.ActionRequest{Action: "clear_agent_history", ProjectID: "alpha", TaskID: "task-1", TaskIDs: []string{"task-1"}})
+	var actionErr *dashboard.ActionError
+	if !errors.As(err, &actionErr) || actionErr.Code != "INVALID_ACTION" {
+		t.Fatalf("unexpected action error: %v", err)
+	}
+}
+
+func TestDashboardClearAgentHistoryRejectsStaleTaskSet(t *testing.T) {
+	root := t.TempDir()
+	paths := config.Paths{StateDir: root, AgentsFile: filepath.Join(root, "agents.json"), BackupsDir: filepath.Join(root, "backups"), ProjectsFile: filepath.Join(root, "projects.toml")}
+	if _, _, err := projects.NewStore(paths).Add(root, "alpha", "personal"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 5, 1, 0, 0, 0, time.UTC)
+	store := agents.NewStateStore(paths)
+	if _, err := store.Create(agents.Task{ID: "task-stopped", ProjectID: "alpha", AgentKind: "codex", Backend: backend.Tmux, BackendRef: "tmux:%2", State: agents.Stopped, StateSource: agents.SourceRegistry, CWD: root, StartedAt: now, LastEventAt: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := (&dashboardService{paths: paths}).Execute(context.Background(), dashboard.ActionRequest{Action: "clear_agent_history", ProjectID: "alpha", TaskIDs: []string{"task-stopped", "task-stale"}})
+	var actionErr *dashboard.ActionError
+	if !errors.As(err, &actionErr) || actionErr.Status != http.StatusConflict {
+		t.Fatalf("stale history did not return conflict: %v", err)
+	}
+	if _, found, loadErr := store.Show("task-stopped"); loadErr != nil || !found {
+		t.Fatalf("stale clear changed registry: found=%v err=%v", found, loadErr)
 	}
 }
 

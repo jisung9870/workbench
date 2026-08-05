@@ -91,12 +91,14 @@ for narrow screens, and print styles remove the navigation chrome.
 | `start_agent` | `project_id`, `agent_kind`, optional `backend` | detached tmux/cmux/Windows Terminal runtime |
 | `jump_agent` | `task_id` | registered active task only |
 | `stop_agent` | `task_id` | registered ownership revalidation; UI confirmation |
+| `clear_agent_history` | `project_id`, exact `task_ids` | confirmed terminal records only; stale-set rejection, cross-process lock, and registry backup |
 
 Shell-backed project open and Agent launch are refused because an interactive
 child would block the Dashboard request and has no browser attachment target.
 There is no arbitrary command, path, prompt, test command, or force-delete
-field. The initial Run tests control is disabled until a registered workflow
-contract exists.
+field. Terminal Agent records are separated from active tasks and cannot invoke
+Jump or Stop. The initial Run tests control is disabled until a registered
+workflow contract exists.
 
 ## Browser security
 

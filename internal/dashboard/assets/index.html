@@ -32,12 +32,23 @@
           <div class="hero-actions"><button data-action="open_project" data-backend="auto" class="primary">Open project</button><button data-action="start_agent" data-agent="codex">Start Codex</button><button data-action="start_agent" data-agent="claude">Start Claude</button></div>
         </section>
         <section class="metrics" aria-label="Project summary">
-          <article><span>Agents</span><strong id="metric-agents">0</strong><small>registered tasks</small></article>
+          <article><span>Agents</span><strong id="metric-agents">0</strong><small>active tasks</small></article>
           <article><span>Worktrees</span><strong id="metric-worktrees">0</strong><small>linked checkouts</small></article>
           <article><span>Changes</span><strong id="metric-changes">0</strong><small id="metric-branch">current branch</small></article>
         </section>
         <div class="grid">
-          <section class="panel agents-panel"><div class="panel-heading"><div><span class="eyebrow">Activity</span><h3>Agents & tasks</h3></div></div><div id="agents" class="cards"></div></section>
+          <section class="panel agents-panel">
+            <div class="panel-heading"><div><span class="eyebrow">Activity</span><h3>Active Agents</h3></div><span id="active-agent-count" class="count">0</span></div>
+            <div id="agents" class="cards"></div>
+            <details id="agent-history" class="agent-history">
+              <summary><span>Task history</span><span id="history-count" class="count">0</span></summary>
+              <div class="history-body">
+                <div class="history-provenance"><span>Registry</span><code id="agent-registry-path">agents.json</code></div>
+                <div id="agent-history-list" class="cards history-cards"></div>
+                <div class="history-actions"><p>Only completed, stopped, and failed records for this project are removed. Active tasks are preserved and a backup is created.</p><button id="clear-agent-history" type="button" class="danger" disabled>Clear history</button></div>
+              </div>
+            </details>
+          </section>
           <section class="panel"><div class="panel-heading"><div><span class="eyebrow">Git</span><h3>Worktrees</h3></div></div><div id="worktrees" class="rows"></div></section>
           <section class="panel"><div class="panel-heading"><div><span class="eyebrow">Repository</span><h3>Changed files</h3></div></div><div id="changes" class="rows"></div></section>
           <section class="panel"><div class="panel-heading"><div><span class="eyebrow">Capabilities</span><h3>Doctor</h3></div><button id="doctor-details" type="button">All checks</button></div><div id="doctor" class="rows"></div></section>
@@ -46,7 +57,7 @@
     </section>
     <aside class="detail" aria-label="Selected task details">
       <span class="eyebrow">Selected task</span><div id="task-empty"><h2>No task selected</h2><p>Choose an Agent card to inspect its registered backend ownership.</p></div>
-      <div id="task-detail" hidden><div class="task-title"><span id="task-kind" class="avatar"></span><div><h2 id="task-id"></h2><span id="task-state" class="status"></span></div></div><dl id="task-fields"></dl><div class="detail-actions"><button data-task-action="jump_agent" class="primary">Jump</button><button data-task-action="stop_agent" class="danger">Stop task</button><button type="button" disabled title="No registered test workflow">Run tests</button></div></div>
+      <div id="task-detail" hidden><div class="task-title"><span id="task-kind" class="avatar"></span><div><h2 id="task-id"></h2><span id="task-state" class="status"></span></div></div><dl id="task-fields"></dl><p id="task-terminal-note" class="terminal-note" hidden>This task is terminal history. Jump and Stop are unavailable.</p><div class="detail-actions"><button id="jump-task" data-task-action="jump_agent" class="primary">Jump</button><button id="stop-task" data-task-action="stop_agent" class="danger">Stop task</button><button type="button" disabled title="No registered test workflow">Run tests</button></div></div>
     </aside>
   </main>
   <script src="/assets/app.js" defer></script>

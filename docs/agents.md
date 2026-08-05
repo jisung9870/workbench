@@ -32,6 +32,24 @@ another active state before reaching a terminal state. Terminal states cannot
 transition back to active. Launch failures remain queryable as `failed`, even
 when the backend never produced a reference.
 
+On Unix and WSL the authoritative registry is
+`${XDG_STATE_HOME:-~/.local/state}/workbench/agents.json`; on native Windows it
+is `%LOCALAPPDATA%\workbench\agents.json`. The Dashboard snapshot reports the
+resolved path as `agent_registry_path` and shows it in Task history.
+
+The Dashboard counts and lists only active states (`starting`, `running`,
+`waiting`, and `idle`) in Active Agents. Terminal states (`completed`,
+`stopped`, and `failed`) remain available under the collapsed Task history
+disclosure. Jump and Stop are disabled for terminal records. Clear history
+sends the exact terminal task IDs shown at confirmation time and removes only
+those records from the selected project. A changed or stale set is rejected;
+active and newly completed records are preserved. The previous registry is
+copied to the Workbench `backups/` directory before the atomic write, and the
+recovery path is shown in the success notice. All Agent registry mutations use
+a per-registry process lock plus an OS advisory file lock (`flock` on supported
+Unix platforms and `LockFileEx` on Windows), which the OS releases when the
+owner process exits.
+
 Workbench tasks use `state_source=registry`. Compatibility observations from
 the legacy binbox pane scraper are valid only with an ID prefixed by `legacy:`
 and `state_source=scrape`; they are never granted Workbench stop authority.

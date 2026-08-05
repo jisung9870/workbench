@@ -66,7 +66,8 @@
 - Existing components to reuse: top bar, brand mark, project list, health card, metric cards, panels, rows, Agent
   cards, status pills, notices, and typed action buttons
 - New/changed components: theme switch, product navigation, guide sidebar, search, section cards, callouts, command
-  blocks, architecture flow, product screenshot figure/caption, feature matrix, and page table of contents
+  blocks, architecture flow, product screenshot figure/caption, feature matrix, page table of contents, and a
+  collapsed Agent history disclosure with registry provenance and an explicitly confirmed clear action
 - Variants and states: dark/light/system theme; active/hover/focus/disabled controls; info/warning/danger callouts;
   available/unavailable/skipped health states
 - Token/component ownership: `internal/dashboard/assets/style.css` owns shared CSS variables and components;
@@ -96,7 +97,8 @@
 - Empty: explain the next action instead of showing an empty frame
 - Error: plain-language notice plus actionable recovery where available
 - Success: brief non-blocking status notice and refreshed state
-- Disabled: state why the action is unavailable through adjacent text or a title
+- Disabled: state why the action is unavailable through adjacent text or a title; terminal Agent tasks never expose
+  enabled Jump or Stop controls
 - Offline/slow network: the embedded guide remains available; Dashboard snapshot errors preserve the last rendered page
 
 ## Content voice

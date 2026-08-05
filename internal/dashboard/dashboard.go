@@ -39,24 +39,31 @@ type ChangeSummary struct {
 	Unavailable  string   `json:"unavailable,omitempty"`
 }
 
+type AgentTask struct {
+	agents.Task
+	Lifecycle string `json:"lifecycle"`
+}
+
 type Snapshot struct {
-	GeneratedAt time.Time          `json:"generated_at"`
-	Platform    string             `json:"platform"`
-	Profile     string             `json:"profile"`
-	Projects    []projects.Project `json:"projects"`
-	Agents      []agents.Task      `json:"agents"`
-	Worktrees   []worktrees.Item   `json:"worktrees"`
-	Changes     []ChangeSummary    `json:"changes"`
-	Doctor      doctor.Report      `json:"doctor"`
-	Warnings    []string           `json:"warnings"`
+	GeneratedAt       time.Time          `json:"generated_at"`
+	Platform          string             `json:"platform"`
+	Profile           string             `json:"profile"`
+	AgentRegistryPath string             `json:"agent_registry_path"`
+	Projects          []projects.Project `json:"projects"`
+	Agents            []AgentTask        `json:"agents"`
+	Worktrees         []worktrees.Item   `json:"worktrees"`
+	Changes           []ChangeSummary    `json:"changes"`
+	Doctor            doctor.Report      `json:"doctor"`
+	Warnings          []string           `json:"warnings"`
 }
 
 type ActionRequest struct {
-	Action    string `json:"action"`
-	ProjectID string `json:"project_id,omitempty"`
-	TaskID    string `json:"task_id,omitempty"`
-	AgentKind string `json:"agent_kind,omitempty"`
-	Backend   string `json:"backend,omitempty"`
+	Action    string   `json:"action"`
+	ProjectID string   `json:"project_id,omitempty"`
+	TaskID    string   `json:"task_id,omitempty"`
+	TaskIDs   []string `json:"task_ids,omitempty"`
+	AgentKind string   `json:"agent_kind,omitempty"`
+	Backend   string   `json:"backend,omitempty"`
 }
 
 type ActionResult struct {

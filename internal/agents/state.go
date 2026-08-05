@@ -64,10 +64,12 @@ type Registry struct {
 	Tasks         []Task `json:"tasks"`
 }
 
+var stateStoreLocks sync.Map
+
 type StateStore struct {
 	path       string
 	backupsDir string
-	mu         sync.Mutex
+	mu         *sync.Mutex
 }
 
 func NewStateStore(paths config.Paths) *StateStore {
@@ -75,7 +77,8 @@ func NewStateStore(paths config.Paths) *StateStore {
 	if path == "" {
 		path = filepath.Join(paths.StateDir, "agents.json")
 	}
-	return &StateStore{path: path, backupsDir: paths.BackupsDir}
+	lock, _ := stateStoreLocks.LoadOrStore(path, &sync.Mutex{})
+	return &StateStore{path: path, backupsDir: paths.BackupsDir, mu: lock.(*sync.Mutex)}
 }
 
 func (store *StateStore) Load() (Registry, error) {
@@ -111,9 +114,18 @@ func (store *StateStore) Show(id string) (Task, bool, error) {
 	return Task{}, false, nil
 }
 
-func (store *StateStore) Create(task Task) (string, error) {
+func (store *StateStore) Create(task Task) (backup string, err error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	release, err := store.acquireRegistryLock()
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if releaseErr := release(); err == nil && releaseErr != nil {
+			err = releaseErr
+		}
+	}()
 	registry, err := store.load()
 	if err != nil {
 		return "", err
@@ -127,9 +139,18 @@ func (store *StateStore) Create(task Task) (string, error) {
 	return store.save(registry)
 }
 
-func (store *StateStore) Update(id string, update func(*Task) error) (Task, string, error) {
+func (store *StateStore) Update(id string, update func(*Task) error) (updated Task, backup string, err error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	release, err := store.acquireRegistryLock()
+	if err != nil {
+		return Task{}, "", err
+	}
+	defer func() {
+		if releaseErr := release(); err == nil && releaseErr != nil {
+			err = releaseErr
+		}
+	}()
 	registry, err := store.load()
 	if err != nil {
 		return Task{}, "", err
@@ -147,10 +168,70 @@ func (store *StateStore) Update(id string, update func(*Task) error) (Task, stri
 			return Task{}, "", fmt.Errorf("invalid agent task transition %s -> %s", before, candidate.State)
 		}
 		registry.Tasks[index] = candidate
-		backup, err := store.save(registry)
+		backup, err = store.save(registry)
 		return candidate, backup, err
 	}
 	return Task{}, "", fmt.Errorf("agent task %q is not registered", id)
+}
+
+func (store *StateStore) PruneTerminal(projectID string, taskIDs []string) (removed int, backup string, err error) {
+	if projectID == "" || len(taskIDs) == 0 {
+		return 0, "", errors.New("project ID and terminal task IDs are required to prune agent history")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	release, err := store.acquireRegistryLock()
+	if err != nil {
+		return 0, "", err
+	}
+	defer func() {
+		if releaseErr := release(); err == nil && releaseErr != nil {
+			err = releaseErr
+		}
+	}()
+	registry, err := store.load()
+	if err != nil {
+		return 0, "", err
+	}
+	requested := make(map[string]struct{}, len(taskIDs))
+	for _, id := range taskIDs {
+		if id == "" {
+			return 0, "", errors.New("terminal task IDs cannot be empty")
+		}
+		if _, duplicate := requested[id]; duplicate {
+			return 0, "", fmt.Errorf("duplicate terminal task ID %q", id)
+		}
+		requested[id] = struct{}{}
+	}
+	matched := make(map[string]struct{}, len(taskIDs))
+	for _, task := range registry.Tasks {
+		if _, exists := requested[task.ID]; !exists {
+			continue
+		}
+		if task.ProjectID != projectID || !IsTerminalState(task.State) {
+			return 0, "", &ConflictError{Message: fmt.Sprintf("agent task %q is no longer terminal history for project %q", task.ID, projectID)}
+		}
+		matched[task.ID] = struct{}{}
+	}
+	if len(matched) != len(requested) {
+		return 0, "", &ConflictError{Message: "agent history changed; refresh and confirm the current records"}
+	}
+	kept := make([]Task, 0, len(registry.Tasks))
+	removed = 0
+	for _, task := range registry.Tasks {
+		if _, remove := requested[task.ID]; remove {
+			removed++
+			continue
+		}
+		kept = append(kept, task)
+	}
+	registry.Tasks = kept
+	backup, err = store.save(registry)
+	return removed, backup, err
+}
+
+func (store *StateStore) acquireRegistryLock() (func() error, error) {
+	return acquireRegistryFileLock(store.path + ".lock")
 }
 
 func NewTaskID(now time.Time) (string, error) {
@@ -255,6 +336,14 @@ func validState(state State) bool {
 	default:
 		return false
 	}
+}
+
+func IsActiveState(state State) bool {
+	return state == Starting || state == Running || state == Waiting || state == Idle
+}
+
+func IsTerminalState(state State) bool {
+	return state == Completed || state == Failed || state == Stopped
 }
 
 func validTransition(from, to State) bool {
