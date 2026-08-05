@@ -129,6 +129,8 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		handler.serveAsset(writer, request, "assets/theme.js", "text/javascript; charset=utf-8")
 	case "/assets/guide.js":
 		handler.serveAsset(writer, request, "assets/guide.js", "text/javascript; charset=utf-8")
+	case "/assets/dashboard-overview-light.jpg":
+		handler.serveAsset(writer, request, "assets/dashboard-overview-light.jpg", "image/jpeg")
 	case "/assets/style.css":
 		handler.serveAsset(writer, request, "assets/style.css", "text/css; charset=utf-8")
 	case "/api/v1/snapshot":

@@ -58,14 +58,15 @@
 - Shape/radius/elevation: 9–16 px radii, one-pixel semantic borders, restrained shadows only for floating notices and
   sticky navigation
 - Motion: short color/border transitions only; no required animation
-- Imagery/iconography: typography, small status marks, and CSS diagrams; no decorative illustrations are required
+- Imagery/iconography: typography, small status marks, CSS diagrams, and sanitized real-product screenshots when they
+  explain spatial roles or a workflow; no decorative or invented interface illustrations
 
 ## Components
 
 - Existing components to reuse: top bar, brand mark, project list, health card, metric cards, panels, rows, Agent
   cards, status pills, notices, and typed action buttons
 - New/changed components: theme switch, product navigation, guide sidebar, search, section cards, callouts, command
-  blocks, architecture flow, feature matrix, and page table of contents
+  blocks, architecture flow, product screenshot figure/caption, feature matrix, and page table of contents
 - Variants and states: dark/light/system theme; active/hover/focus/disabled controls; info/warning/danger callouts;
   available/unavailable/skipped health states
 - Token/component ownership: `internal/dashboard/assets/style.css` owns shared CSS variables and components;
@@ -110,8 +111,8 @@
 
 - Framework/styling system: Go `embed`, `net/http`, static HTML/CSS/vanilla JavaScript; no frontend build system
 - Design-token constraints: extend the existing CSS custom properties instead of introducing another theme layer
-- Performance constraints: no remote fonts, images, analytics, or runtime dependencies; all guide assets ship in the
-  binary
+- Performance constraints: no remote fonts, images, analytics, or runtime dependencies; sanitized product screenshots
+  and all other guide assets ship in the binary
 - Compatibility constraints: restrictive same-origin CSP, loopback-only server, no CORS, and device-local theme
   preference only
 - Test/screenshot expectations: Go handler contracts, JavaScript syntax checks, targeted DOM/theme assertions, and a

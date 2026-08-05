@@ -60,9 +60,10 @@ func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
 		contains    []string
 	}{
 		{path: "/", contentType: "text/html", contains: []string{`id="theme-select"`, `href="/guide"`, `/assets/theme.js`}},
-		{path: "/guide", contentType: "text/html", contains: []string{`id="guide-search"`, `id="architecture"`, `id="cli-reference"`, `id="troubleshooting"`}},
+		{path: "/guide", contentType: "text/html", contains: []string{`id="guide-search"`, `id="architecture"`, `id="cli-reference"`, `id="troubleshooting"`, `/assets/dashboard-overview-light.jpg`, `alt="Workbench Dashboard 화면 구성`}},
 		{path: "/assets/theme.js", contentType: "text/javascript", contains: []string{"workbench.dashboard.theme.v1", "localStorage"}},
 		{path: "/assets/guide.js", contentType: "text/javascript", contains: []string{"guide-search", "IntersectionObserver"}},
+		{path: "/assets/dashboard-overview-light.jpg", contentType: "image/jpeg"},
 		{path: "/assets/style.css", contentType: "text/css", contains: []string{"prefers-color-scheme: light", `data-theme="light"`, "[hidden] { display: none !important; }"}},
 	}
 	for _, test := range tests {
@@ -81,6 +82,26 @@ func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHandlerServesEmbeddedDashboardScreenshot(t *testing.T) {
+	handler, err := NewHandler(&fakeService{}, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/assets/dashboard-overview-light.jpg", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got := response.Header().Get("Content-Type"); !strings.Contains(got, "image/jpeg") {
+		t.Fatalf("Content-Type = %q, want image/jpeg", got)
+	}
+	body := response.Body.Bytes()
+	if len(body) < 2 || body[0] != 0xff || body[1] != 0xd8 {
+		t.Fatalf("embedded screenshot is not a JPEG: size=%d", len(body))
 	}
 }
 

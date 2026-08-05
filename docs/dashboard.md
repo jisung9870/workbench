@@ -73,6 +73,10 @@ The current guide covers:
 - Dashboard and Doctor operations, the security model, and fallback evidence;
 - the CLI, configuration, local data, HTTP API, exit codes, and troubleshooting.
 
+Product screenshots use isolated documentation fixtures so committed images do
+not expose a user's project names, home directory, task identifiers, or local
+state. Images are embedded in the binary and never loaded from a remote host.
+
 Search filters whole sections as the user types. `Escape` clears the query.
 Section navigation follows the currently visible heading, the layout collapses
 for narrow screens, and print styles remove the navigation chrome.

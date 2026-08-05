@@ -233,6 +233,10 @@ h3 { font-size: 17px; margin-bottom: 0; }
 .guide-section p code, .guide-section li code, .guide-section td code { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); }
 .lead { max-width: 700px; font-size: 18px; line-height: 1.75; }
 .guide-actions { display: flex; gap: 9px; flex-wrap: wrap; margin: 28px 0 32px; }
+.guide-figure { margin: 26px 0 32px; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 18px 42px var(--shadow); }
+.guide-figure img { display: block; width: 100%; height: auto; background: #fff; border-bottom: 1px solid var(--line); }
+.guide-figure figcaption { display: grid; gap: 5px; padding: 15px 18px 17px; }
+.guide-figure figcaption span { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .feature-strip { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .feature-strip article, .component-grid article, .safety-list article, .status-grid article { display: grid; gap: 6px; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 13px; }
 .feature-strip span, .component-grid p, .safety-list span, .status-grid p { color: var(--muted); font-size: 13px; margin: 0; }
@@ -369,5 +373,6 @@ td { color: var(--muted); }
   .guide-layout { display: block; }
   .guide-content { padding: 0; }
   .guide-section { max-width: none; break-inside: avoid; }
+  .guide-figure { box-shadow: none; break-inside: avoid; }
   body { background: #fff; color: #000; }
 }
