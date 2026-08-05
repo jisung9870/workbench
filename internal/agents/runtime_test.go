@@ -68,9 +68,84 @@ func TestTmuxStopKillsOnlyVerifiedPane(t *testing.T) {
 	if err := NewTmuxRuntime(executor, nil).Stop(context.Background(), task); err != nil {
 		t.Fatal(err)
 	}
+	verified := executor.calls[len(executor.calls)-2]
+	if strings.Join(verified.Args, " ") != "display-message -p -t %7 #{@workbench_task_id}" {
+		t.Fatalf("unexpected ownership command: %#v", verified.Args)
+	}
 	last := executor.calls[len(executor.calls)-1]
-	if strings.Join(last.Args, " ") != "kill-pane -t =%7" {
+	if strings.Join(last.Args, " ") != "kill-pane -t %7" {
 		t.Fatalf("unexpected stop command: %#v", last.Args)
+	}
+}
+
+func TestTmuxLaunchSetsMetadataOnRawPaneID(t *testing.T) {
+	executor := &fakeExecutor{lookups: map[string]string{"tmux": "/usr/bin/tmux"}}
+	executor.run = func(request backend.ProcessRequest) (backend.ProcessResult, error) {
+		result := backend.ProcessResult{Command: append([]string{request.Name}, request.Args...), ExitCode: 0}
+		if len(request.Args) > 0 && request.Args[0] == "new-window" {
+			result.Stdout = "%7\n"
+		}
+		return result, nil
+	}
+	started := ""
+	result, err := NewTmuxRuntime(executor, nil).Launch(context.Background(), LaunchRequest{
+		Task:       Task{ID: "task-1", AgentKind: "codex", CWD: "/tmp/project"},
+		Project:    projects.Project{ID: "alpha"},
+		Executable: "/usr/bin/codex",
+		OnStarted: func(reference string, _ map[string]string, _ int) error {
+			started = reference
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Waited || started != "tmux:%7" {
+		t.Fatalf("unexpected tmux launch result: %#v ref=%q", result, started)
+	}
+	metadataCalls := 0
+	for _, call := range executor.calls {
+		if len(call.Args) > 0 && call.Args[0] == "set-option" {
+			metadataCalls++
+			if len(call.Args) < 4 || call.Args[3] != "%7" {
+				t.Fatalf("metadata did not target raw pane ID: %#v", call.Args)
+			}
+		}
+	}
+	if metadataCalls != 2 {
+		t.Fatalf("unexpected metadata call count: %d", metadataCalls)
+	}
+}
+
+func TestTmuxJumpTargetsRawPaneID(t *testing.T) {
+	task := Task{ID: "task-1", Backend: backend.Tmux, BackendRef: "tmux:%7", BackendDetails: map[string]string{"pane": "%7", "session": "alpha"}}
+
+	for _, test := range []struct {
+		name     string
+		tmuxEnv  string
+		expected string
+	}{
+		{name: "inside tmux", tmuxEnv: "/tmp/tmux,1,0", expected: "switch-client -t %7"},
+		{name: "outside tmux", expected: "attach-session -t =alpha ; select-pane -t %7"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executor := &fakeExecutor{lookups: map[string]string{"tmux": "/usr/bin/tmux"}}
+			executor.run = func(request backend.ProcessRequest) (backend.ProcessResult, error) {
+				result := backend.ProcessResult{Command: append([]string{request.Name}, request.Args...), ExitCode: 0}
+				if len(request.Args) > 0 && request.Args[0] == "display-message" {
+					result.Stdout = task.ID + "\n"
+				}
+				return result, nil
+			}
+			getenv := func(string) string { return test.tmuxEnv }
+			if err := NewTmuxRuntime(executor, getenv).Jump(context.Background(), task); err != nil {
+				t.Fatal(err)
+			}
+			last := executor.calls[len(executor.calls)-1]
+			if strings.Join(last.Args, " ") != test.expected {
+				t.Fatalf("unexpected jump command: %#v", last.Args)
+			}
+		})
 	}
 }
 

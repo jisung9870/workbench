@@ -136,7 +136,7 @@ func (runtime *TmuxRuntime) Launch(ctx context.Context, request LaunchRequest) (
 		return launchFromProcess(process, false), err
 	}
 	for key, value := range map[string]string{"@workbench_task_id": request.Task.ID, "@workbench_agent_kind": request.Task.AgentKind} {
-		metadata, metadataErr := runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"set-option", "-p", "-t", "=" + pane, key, value}})
+		metadata, metadataErr := runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"set-option", "-p", "-t", pane, key, value}})
 		if metadataErr != nil {
 			return launchFromProcess(metadata, false), fmt.Errorf("set tmux pane ownership metadata: %w", metadataErr)
 		}
@@ -161,9 +161,9 @@ func (runtime *TmuxRuntime) Jump(ctx context.Context, task Task) error {
 	}
 	pane := task.BackendDetails["pane"]
 	if runtime.getenv != nil && runtime.getenv("TMUX") != "" {
-		_, err = runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"switch-client", "-t", "=" + pane}, Interactive: true})
+		_, err = runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"switch-client", "-t", pane}, Interactive: true})
 	} else {
-		_, err = runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"attach-session", "-t", "=" + task.BackendDetails["session"], ";", "select-pane", "-t", "=" + pane}, Interactive: true})
+		_, err = runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"attach-session", "-t", "=" + task.BackendDetails["session"], ";", "select-pane", "-t", pane}, Interactive: true})
 	}
 	return err
 }
@@ -172,7 +172,7 @@ func (runtime *TmuxRuntime) Stop(ctx context.Context, task Task) error {
 	if err != nil {
 		return err
 	}
-	_, err = runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"kill-pane", "-t", "=" + task.BackendDetails["pane"]}})
+	_, err = runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"kill-pane", "-t", task.BackendDetails["pane"]}})
 	return err
 }
 func (runtime *TmuxRuntime) verify(ctx context.Context, task Task) (string, error) {
@@ -184,7 +184,7 @@ func (runtime *TmuxRuntime) verify(ctx context.Context, task Task) (string, erro
 	if err != nil {
 		return "", err
 	}
-	result, err := runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"display-message", "-p", "-t", "=" + pane, "#{@workbench_task_id}"}})
+	result, err := runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"display-message", "-p", "-t", pane, "#{@workbench_task_id}"}})
 	if err != nil {
 		return "", err
 	}
