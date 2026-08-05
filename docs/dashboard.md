@@ -83,7 +83,7 @@ for narrow screens, and print styles remove the navigation chrome.
 
 | Action | Required fields | Boundary |
 |---|---|---|
-| `open_project` | `project_id`, optional `backend` | cmux or Windows Terminal only |
+| `open_project` | `project_id`, optional `backend` | cmux or Windows Terminal only; `auto` ignores interactive tmux/shell preferences |
 | `start_agent` | `project_id`, `agent_kind`, optional `backend` | detached tmux/cmux/Windows Terminal runtime |
 | `jump_agent` | `task_id` | registered active task only |
 | `stop_agent` | `task_id` | registered ownership revalidation; UI confirmation |

@@ -184,21 +184,71 @@ func (service *dashboardService) openProject(ctx context.Context, request dashbo
 		return dashboard.ActionResult{}, dashboardInvalid(err.Error())
 	}
 	executor := &backend.OSExecutor{Stdout: io.Discard, Stderr: io.Discard}
-	selection, err := dashboardBackendRegistry(executor, backend.CurrentEnvironment()).Select(ctx, backend.OpenRequest{Project: project, Profile: profile}, requested)
+	environment := backend.CurrentEnvironment()
+	selection, err := selectDashboardOpenBackend(ctx, dashboardBackendRegistry(executor, environment), backend.OpenRequest{Project: project, Profile: profile}, requested, environment)
 	if err != nil {
 		return dashboard.ActionResult{}, dashboardCommandError(backendSelectionError(err))
-	}
-	if selection.Adapter.Name() != backend.CMUX && selection.Adapter.Name() != backend.WindowsTerminal {
-		return dashboard.ActionResult{}, &dashboard.ActionError{
-			Status: http.StatusServiceUnavailable, Code: "BACKEND_UNAVAILABLE",
-			Message: fmt.Sprintf("dashboard project open requires cmux or Windows Terminal; selected %s", selection.Adapter.Name()),
-		}
 	}
 	result, err := selection.Adapter.OpenProject(ctx, backend.OpenRequest{Project: project, Profile: profile})
 	if err != nil {
 		return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusInternalServerError, Code: "BACKEND_EXECUTION_FAILED", Message: err.Error()}
 	}
 	return dashboard.ActionResult{Message: fmt.Sprintf("opened %s with %s", project.ID, result.Backend)}, nil
+}
+
+func selectDashboardOpenBackend(ctx context.Context, registry *backend.Registry, request backend.OpenRequest, requested backend.Name, environment backend.Environment) (backend.Selection, error) {
+	if requested != backend.Auto {
+		if requested != backend.CMUX && requested != backend.WindowsTerminal {
+			return backend.Selection{}, fmt.Errorf("Dashboard project open supports only cmux or Windows Terminal, not %s", requested)
+		}
+		return registry.Select(ctx, request, requested)
+	}
+
+	candidates := []backend.Name{}
+	seen := map[backend.Name]struct{}{}
+	appendCandidate := func(name backend.Name) {
+		if name != backend.CMUX && name != backend.WindowsTerminal {
+			return
+		}
+		if _, exists := seen[name]; exists {
+			return
+		}
+		seen[name] = struct{}{}
+		candidates = append(candidates, name)
+	}
+	appendCandidate(backend.Name(request.Project.DefaultBackend))
+	appendCandidate(backend.Name(request.Profile.DefaultBackend))
+	for _, configured := range request.Profile.BackendPriority {
+		candidate := backend.Name(configured)
+		if candidate == backend.CMUX && environment.IsSSH() {
+			continue
+		}
+		appendCandidate(candidate)
+	}
+	if environment.GOOS == "windows" || environment.IsWSL() {
+		appendCandidate(backend.WindowsTerminal)
+	}
+	if environment.GOOS == "darwin" && !environment.IsSSH() {
+		appendCandidate(backend.CMUX)
+	}
+
+	reasons := []string{}
+	for _, candidate := range candidates {
+		selection, err := registry.Select(ctx, request, candidate)
+		if err == nil {
+			return selection, nil
+		}
+		var unavailable *backend.UnavailableError
+		if !errors.As(err, &unavailable) {
+			return backend.Selection{}, err
+		}
+		reasons = append(reasons, fmt.Sprintf("%s: %s", candidate, unavailable.Reason))
+	}
+	reason := "no Dashboard-compatible backend was detected; use the CLI for tmux or shell project open"
+	if len(reasons) > 0 {
+		reason += "; " + strings.Join(reasons, "; ")
+	}
+	return backend.Selection{}, &backend.UnavailableError{Backend: backend.Auto, Reason: reason}
 }
 
 func (service *dashboardService) agentBackend(ctx context.Context, projectID, requestedValue string) (backend.Name, error) {

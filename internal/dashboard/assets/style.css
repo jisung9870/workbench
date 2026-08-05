@@ -90,6 +90,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { scroll-behavior: smooth; scroll-padding-top: 92px; }
 body { margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
 a { color: var(--blue); }

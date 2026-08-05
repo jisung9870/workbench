@@ -63,7 +63,7 @@ func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
 		{path: "/guide", contentType: "text/html", contains: []string{`id="guide-search"`, `id="architecture"`, `id="cli-reference"`, `id="troubleshooting"`}},
 		{path: "/assets/theme.js", contentType: "text/javascript", contains: []string{"workbench.dashboard.theme.v1", "localStorage"}},
 		{path: "/assets/guide.js", contentType: "text/javascript", contains: []string{"guide-search", "IntersectionObserver"}},
-		{path: "/assets/style.css", contentType: "text/css", contains: []string{"prefers-color-scheme: light", `data-theme="light"`}},
+		{path: "/assets/style.css", contentType: "text/css", contains: []string{"prefers-color-scheme: light", `data-theme="light"`, "[hidden] { display: none !important; }"}},
 	}
 	for _, test := range tests {
 		t.Run(test.path, func(t *testing.T) {
