@@ -6,7 +6,10 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"time"
 )
+
+const capturedProcessWaitDelay = 250 * time.Millisecond
 
 type ProcessRequest struct {
 	Dir         string
@@ -52,6 +55,7 @@ func (executor *OSExecutor) Run(ctx context.Context, request ProcessRequest) (Pr
 	} else {
 		command.Stdout = &stdout
 		command.Stderr = &stderr
+		command.WaitDelay = capturedProcessWaitDelay
 	}
 	err := command.Start()
 	if err == nil {
@@ -77,6 +81,9 @@ func (executor *OSExecutor) Run(ctx context.Context, request ProcessRequest) (Pr
 	}
 	if err == nil {
 		return result, nil
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return result, errors.Join(contextErr, err)
 	}
 	var exitError *exec.ExitError
 	if errors.As(err, &exitError) {

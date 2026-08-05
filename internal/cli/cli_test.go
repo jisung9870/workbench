@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -90,7 +91,11 @@ func TestOpenShellPreservesBackendExit(t *testing.T) {
 	t.Setenv("SSH_CONNECTION", "")
 	t.Setenv("SSH_CLIENT", "")
 	t.Setenv("SSH_TTY", "")
-	t.Setenv("SHELL", "/bin/false")
+	falseCommand, err := exec.LookPath("false")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELL", falseCommand)
 	projectDir := filepath.Join(root, "alpha")
 	if err := os.Mkdir(projectDir, 0o700); err != nil {
 		t.Fatal(err)

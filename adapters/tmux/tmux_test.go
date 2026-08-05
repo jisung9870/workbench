@@ -35,6 +35,10 @@ func TestInsideTmuxCreatesMissingSessionThenSwitches(t *testing.T) {
 		return ""
 	})
 	path := t.TempDir()
+	canonicalPath, err := projects.CanonicalPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	result, err := adapter.OpenProject(context.Background(), backend.OpenRequest{Project: projects.Project{ID: "alpha", Path: path}})
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +46,7 @@ func TestInsideTmuxCreatesMissingSessionThenSwitches(t *testing.T) {
 	if len(executor.requests) != 3 {
 		t.Fatalf("unexpected calls: %#v", executor.requests)
 	}
-	wantCreate := []string{"new-session", "-d", "-s", "alpha", "-c", path}
+	wantCreate := []string{"new-session", "-d", "-s", "alpha", "-c", canonicalPath}
 	if !reflect.DeepEqual(executor.requests[1].Args, wantCreate) {
 		t.Fatalf("unexpected create args: %v", executor.requests[1].Args)
 	}
@@ -58,11 +62,15 @@ func TestOutsideTmuxUsesAttachOrCreateArgumentArray(t *testing.T) {
 	executor := &fakeExecutor{}
 	adapter := New(executor, func(string) string { return "" })
 	path := t.TempDir()
-	_, err := adapter.OpenProject(context.Background(), backend.OpenRequest{Project: projects.Project{ID: "alpha", Path: path}})
+	canonicalPath, err := projects.CanonicalPath(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"new-session", "-A", "-s", "alpha", "-c", path}
+	_, err = adapter.OpenProject(context.Background(), backend.OpenRequest{Project: projects.Project{ID: "alpha", Path: path}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"new-session", "-A", "-s", "alpha", "-c", canonicalPath}
 	if len(executor.requests) != 1 || !reflect.DeepEqual(executor.requests[0].Args, want) || !executor.requests[0].Interactive {
 		t.Fatalf("unexpected process request: %#v", executor.requests)
 	}

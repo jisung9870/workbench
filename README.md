@@ -156,8 +156,11 @@ wsl_path = "/home/me/projects/terraform-lab"
 
 External processes are invoked as argument arrays. Launch timeout, exit code,
 stdout, stderr, command arguments, and backend reference are retained in the
-result or error. Interactive shell/tmux sessions intentionally have no launch
-timeout because their lifetime is controlled by the user.
+result or error. After cancellation, non-interactive capture closes inherited
+pipes after a bounded grace period so a detached descendant cannot hold the CLI
+open indefinitely; this is a pipe-lifetime guarantee, not portable process-tree
+ownership. Interactive shell/tmux sessions intentionally have no launch timeout
+because their lifetime is controlled by the user.
 
 ## Worktrees
 

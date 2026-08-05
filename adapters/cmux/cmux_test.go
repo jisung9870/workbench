@@ -34,11 +34,15 @@ func TestOpenPassesProjectPathAsOneArgument(t *testing.T) {
 	executor := &fakeExecutor{}
 	adapter := New(executor, "darwin")
 	path := t.TempDir()
-	_, err := adapter.OpenProject(context.Background(), backend.OpenRequest{Project: projects.Project{ID: "alpha", Path: path}})
+	canonicalPath, err := projects.CanonicalPath(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(executor.request.Args) != 1 || executor.request.Args[0] != path {
+	_, err = adapter.OpenProject(context.Background(), backend.OpenRequest{Project: projects.Project{ID: "alpha", Path: path}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.request.Args) != 1 || executor.request.Args[0] != canonicalPath {
 		t.Fatalf("unexpected cmux command: %#v", executor.request)
 	}
 }

@@ -145,6 +145,10 @@ func TestRemoveRejectsRegistryPathThatDoesNotMatchPorcelain(t *testing.T) {
 	if err := os.Mkdir(fakePath, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	fakePath, err = projects.CanonicalPath(fakePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	registry.Worktrees[0].Path = fakePath
 	if _, err := fixture.state.save(registry); err != nil {
 		t.Fatal(err)

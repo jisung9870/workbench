@@ -28,11 +28,15 @@ func TestOpenUsesWorkingDirectoryWithoutShellInterpolation(t *testing.T) {
 		return ""
 	}})
 	path := t.TempDir()
+	canonicalPath, err := projects.CanonicalPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	result, err := adapter.OpenProject(context.Background(), backend.OpenRequest{Project: projects.Project{ID: "alpha", Path: path}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if executor.request.Dir != path || executor.request.Name != "/bin/test-shell" || len(executor.request.Args) != 0 || !executor.request.Interactive {
+	if executor.request.Dir != canonicalPath || executor.request.Name != "/bin/test-shell" || len(executor.request.Args) != 0 || !executor.request.Interactive {
 		t.Fatalf("unexpected process request: %#v", executor.request)
 	}
 	if result.Reference != "shell:alpha" {

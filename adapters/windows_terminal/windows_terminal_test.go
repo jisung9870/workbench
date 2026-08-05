@@ -65,6 +65,10 @@ func TestWSLOpenUsesExplicitWtAndWslArgumentArray(t *testing.T) {
 		}
 	}})
 	path := t.TempDir()
+	canonicalPath, err := projects.CanonicalPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	result, err := adapter.OpenProject(context.Background(), backend.OpenRequest{
 		Project: projects.Project{ID: "alpha", Path: path},
 		Profile: config.Profile{WindowsTerminalProfile: "Ubuntu-24.04"},
@@ -72,7 +76,7 @@ func TestWSLOpenUsesExplicitWtAndWslArgumentArray(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"--window", "last", "new-tab", "--profile", "Ubuntu-24.04", "wsl.exe", "-d", "Ubuntu-24.04", "--cd", path}
+	want := []string{"--window", "last", "new-tab", "--profile", "Ubuntu-24.04", "wsl.exe", "-d", "Ubuntu-24.04", "--cd", canonicalPath}
 	if executor.request.Name != "wt.exe" || !reflect.DeepEqual(executor.request.Args, want) {
 		t.Fatalf("unexpected Windows Terminal command: %#v", executor.request)
 	}
@@ -138,14 +142,18 @@ func TestWSLOpenUsesProfileDistroWhenEnvironmentIsMissing(t *testing.T) {
 		return ""
 	}})
 	path := t.TempDir()
-	_, err := adapter.OpenProject(context.Background(), backend.OpenRequest{
+	canonicalPath, err := projects.CanonicalPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.OpenProject(context.Background(), backend.OpenRequest{
 		Project: projects.Project{ID: "alpha", Path: path},
 		Profile: config.Profile{WindowsTerminalDistro: "Debian"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantTail := []string{"wsl.exe", "-d", "Debian", "--cd", path}
+	wantTail := []string{"wsl.exe", "-d", "Debian", "--cd", canonicalPath}
 	if !reflect.DeepEqual(executor.request.Args[len(executor.request.Args)-len(wantTail):], wantTail) {
 		t.Fatalf("profile distro was not used: %v", executor.request.Args)
 	}
@@ -199,7 +207,11 @@ func TestNativeWindowsOpenUsesStartingDirectoryAndSplit(t *testing.T) {
 	executor := &fakeExecutor{}
 	adapter := New(executor, Environment{GOOS: "windows", Getenv: func(string) string { return "" }})
 	path := t.TempDir()
-	_, err := adapter.OpenProject(context.Background(), backend.OpenRequest{
+	canonicalPath, err := projects.CanonicalPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.OpenProject(context.Background(), backend.OpenRequest{
 		Project: projects.Project{ID: "alpha", Path: path},
 		Profile: config.Profile{
 			WindowsTerminalProfile: "PowerShell",
@@ -210,7 +222,7 @@ func TestNativeWindowsOpenUsesStartingDirectoryAndSplit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"--window", "team", "split-pane", "--horizontal", "--profile", "PowerShell", "--startingDirectory", path}
+	want := []string{"--window", "team", "split-pane", "--horizontal", "--profile", "PowerShell", "--startingDirectory", canonicalPath}
 	if executor.request.Name != "wt.exe" || !reflect.DeepEqual(executor.request.Args, want) {
 		t.Fatalf("unexpected native Windows command: %#v", executor.request)
 	}

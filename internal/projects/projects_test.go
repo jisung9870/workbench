@@ -40,7 +40,7 @@ func TestAddRejectsCanonicalDuplicateAndRemovePreservesDirectory(t *testing.T) {
 		t.Fatalf("expected canonical duplicate rejection, got %v", err)
 	}
 	removed, found, backup, err := store.Remove(project.ID)
-	if err != nil || !found || removed.Path != projectDir {
+	if err != nil || !found || removed.Path != project.Path {
 		t.Fatalf("unexpected remove result: %#v %t %q %v", removed, found, backup, err)
 	}
 	if _, err := os.Stat(projectDir); err != nil {
