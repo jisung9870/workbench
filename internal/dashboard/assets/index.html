@@ -5,13 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="workbench-token" content="{{.Token}}">
   <title>Workbench</title>
+  <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to workspace</a>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark">W</span><div><strong>Workbench</strong><small>Local control plane</small></div></div>
-    <div class="top-status"><span id="platform">loading</span><span class="dot">•</span><span id="profile">profile</span><button id="refresh" type="button">Refresh</button></div>
+    <div class="topbar-start">
+      <a class="brand" href="/" aria-label="Workbench Dashboard"><span class="brand-mark">W</span><span><strong>Workbench</strong><small>Local control plane</small></span></a>
+      <nav class="product-nav" aria-label="Product"><a class="active" href="/" aria-current="page">Dashboard</a><a href="/guide">Guide</a></nav>
+    </div>
+    <div class="top-status"><span id="platform">loading</span><span class="dot">•</span><span id="profile">profile</span><label class="theme-control"><span>Theme</span><select id="theme-select" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label><button id="refresh" type="button">Refresh</button></div>
   </header>
   <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
   <main id="main" class="layout">

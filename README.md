@@ -293,7 +293,14 @@ The Dashboard shows registered projects and Agent tasks, linked worktrees, Git
 change summaries, and Doctor capabilities. Mutations are limited to typed
 project-open and Agent start/jump/stop actions. Cross-origin requests and action
 requests without the per-process token are rejected; no arbitrary shell command
-field is exposed. See [docs/dashboard.md](docs/dashboard.md).
+field is exposed.
+
+Use the **Theme** control to follow the operating-system appearance or select
+Light or Dark explicitly. The preference is stored only in browser localStorage.
+The same loopback server exposes an offline, searchable product guide at
+`/guide`; use the **Guide** link in the top navigation after starting the
+Dashboard. See [docs/dashboard.md](docs/dashboard.md) for routes, security, and
+verification details.
 
 ## Development
 

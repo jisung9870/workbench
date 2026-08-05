@@ -82,6 +82,7 @@ type Handler struct {
 	service Service
 	token   string
 	index   *template.Template
+	guide   *template.Template
 }
 
 func NewToken() (string, error) {
@@ -104,7 +105,15 @@ func NewHandler(service Service, token string) (*Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse dashboard index: %w", err)
 	}
-	return &Handler{service: service, token: token, index: index}, nil
+	guideContents, err := assets.ReadFile("assets/guide.html")
+	if err != nil {
+		return nil, err
+	}
+	guide, err := template.New("guide").Parse(string(guideContents))
+	if err != nil {
+		return nil, fmt.Errorf("parse dashboard guide: %w", err)
+	}
+	return &Handler{service: service, token: token, index: index, guide: guide}, nil
 }
 
 func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -112,8 +121,14 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	switch request.URL.Path {
 	case "/":
 		handler.serveIndex(writer, request)
+	case "/guide", "/guide/", "/docs", "/docs/":
+		handler.serveGuide(writer, request)
 	case "/assets/app.js":
 		handler.serveAsset(writer, request, "assets/app.js", "text/javascript; charset=utf-8")
+	case "/assets/theme.js":
+		handler.serveAsset(writer, request, "assets/theme.js", "text/javascript; charset=utf-8")
+	case "/assets/guide.js":
+		handler.serveAsset(writer, request, "assets/guide.js", "text/javascript; charset=utf-8")
 	case "/assets/style.css":
 		handler.serveAsset(writer, request, "assets/style.css", "text/css; charset=utf-8")
 	case "/api/v1/snapshot":
@@ -122,6 +137,20 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		handler.serveAction(writer, request)
 	default:
 		http.NotFound(writer, request)
+	}
+}
+
+func (handler *Handler) serveGuide(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		methodNotAllowed(writer, http.MethodGet)
+		return
+	}
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if request.Method == http.MethodHead {
+		return
+	}
+	if err := handler.guide.Execute(writer, nil); err != nil {
+		http.Error(writer, "render dashboard guide", http.StatusInternalServerError)
 	}
 }
 

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Workbench의 구조, 구성 요소, 기능, 운영 및 문제 해결 가이드">
+  <title>Workbench Guide</title>
+  <script src="/assets/theme.js"></script>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body class="guide-page">
+  <a class="skip-link" href="#guide-main">본문으로 건너뛰기</a>
+  <header class="topbar guide-topbar">
+    <div class="topbar-start">
+      <a class="brand" href="/" aria-label="Workbench Dashboard"><span class="brand-mark">W</span><span><strong>Workbench</strong><small>Documentation</small></span></a>
+      <nav class="product-nav" aria-label="Product"><a href="/">Dashboard</a><a class="active" href="/guide" aria-current="page">Guide</a></nav>
+    </div>
+    <div class="guide-tools">
+      <label class="guide-search"><span class="sr-only">문서 검색</span><input id="guide-search" type="search" placeholder="문서에서 검색" autocomplete="off"></label>
+      <label class="theme-control"><span>Theme</span><select id="theme-select" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+    </div>
+  </header>
+  <div class="guide-layout">
+    <aside class="guide-sidebar" aria-label="문서 탐색">
+      <div class="guide-version"><span class="status available">Implemented</span><strong>Current source</strong><small>로컬 바이너리에 포함된 문서</small></div>
+      <nav class="guide-nav">
+        <div><span>시작하기</span><a data-guide-link href="#overview">Workbench 소개</a><a data-guide-link href="#quickstart">빠른 시작</a><a data-guide-link href="#architecture">아키텍처</a></div>
+        <div><span>핵심 개념</span><a data-guide-link href="#components">구성 요소와 역할</a><a data-guide-link href="#projects-profiles">Projects와 Profiles</a><a data-guide-link href="#backends">Backends</a><a data-guide-link href="#worktrees">Worktrees</a><a data-guide-link href="#agents">Agents와 Tasks</a></div>
+        <div><span>사용 가이드</span><a data-guide-link href="#dashboard-guide">Dashboard 사용</a><a data-guide-link href="#doctor-operations">Doctor와 운영</a><a data-guide-link href="#security">보안 모델</a></div>
+        <div><span>Reference</span><a data-guide-link href="#cli-reference">CLI</a><a data-guide-link href="#config-reference">Configuration</a><a data-guide-link href="#data-reference">Data와 API</a><a data-guide-link href="#troubleshooting">문제 해결</a><a data-guide-link href="#glossary">용어집</a></div>
+      </nav>
+    </aside>
+    <main id="guide-main" class="guide-content">
+      <div id="guide-search-empty" class="guide-empty" hidden><strong>검색 결과가 없습니다.</strong><span>명령, 구성 요소, 오류 코드 또는 플랫폼 이름으로 다시 검색하세요.</span></div>
+      <section id="overview" class="guide-section guide-hero" data-searchable>
+        <span class="eyebrow">Overview</span>
+        <h1>로컬 개발 환경을 하나의 모델로 운영합니다.</h1>
+        <p class="lead">Workbench는 프로젝트, Git worktree, 코딩 Agent task, terminal backend, 환경 진단을 연결하는 headless control plane입니다. CLI가 상태와 안전 경계를 소유하고 Dashboard, LazyVim, cmux 같은 client는 같은 계약을 사용합니다.</p>
+        <div class="guide-actions"><a class="button primary" href="#quickstart">5분 안에 시작하기</a><a class="button" href="#architecture">구조 이해하기</a><a class="button" href="/">Dashboard 열기</a></div>
+        <div class="feature-strip" aria-label="핵심 특성"><article><strong>No daemon</strong><span>명령 실행 또는 Dashboard foreground process만 사용</span></article><article><strong>Local first</strong><span>registry와 설정은 사용자 XDG 경로에 저장</span></article><article><strong>Typed actions</strong><span>브라우저에서 임의 shell command를 실행하지 않음</span></article><article><strong>Cross-platform</strong><span>macOS, Linux/WSL, native Windows backend 계약</span></article></div>
+        <div class="callout info"><strong>현재 범위</strong><p>이 문서는 현재 구현된 기능만 설명합니다. 독립 Desktop 앱, session registry, workflow runner, Dashboard의 임의 test 실행은 아직 제공하지 않습니다.</p></div>
+      </section>
+      <section id="quickstart" class="guide-section" data-searchable>
+        <span class="eyebrow">Get started</span><h2>빠른 시작</h2><p>설치부터 첫 프로젝트를 Dashboard에서 확인하기까지의 최소 흐름입니다.</p>
+        <ol class="steps">
+          <li><div><span>1</span><h3>빌드하고 설치합니다.</h3></div><pre><code>cd workbench<br>make test<br>make install</code></pre><p>기본 설치 위치는 <code>~/.local/bin/wb</code>입니다.</p></li>
+          <li><div><span>2</span><h3>환경 계약을 확인합니다.</h3></div><pre><code>wb config validate<br>wb doctor</code></pre><p>기본 Doctor는 core 실패에만 non-zero를 반환합니다. 모든 optional provider까지 요구하려면 <code>--strict</code>를 사용합니다.</p></li>
+          <li><div><span>3</span><h3>프로젝트를 등록합니다.</h3></div><pre><code>wb projects add ~/home/projects/example --id example<br>wb projects list --json</code></pre><p>경로는 canonical absolute path로 저장되고 ID는 장비 간 portable identity가 됩니다.</p></li>
+          <li><div><span>4</span><h3>프로젝트를 엽니다.</h3></div><pre><code>wb open example<br>wb open example --backend tmux</code></pre><p><code>auto</code>는 현재 tmux, profile priority, platform fallback 순서로 선택합니다.</p></li>
+          <li><div><span>5</span><h3>Dashboard를 시작합니다.</h3></div><pre><code>wb dashboard<br>wb dashboard --open none --port 0</code></pre><p>Dashboard는 <code>127.0.0.1</code>에만 bind하며 <code>Ctrl-C</code>로 종료합니다.</p></li>
+        </ol>
+      </section>
+      <section id="architecture" class="guide-section" data-searchable>
+        <span class="eyebrow">Concepts</span><h2>현재 아키텍처</h2><p>Workbench core가 canonical state와 정책을 소유합니다. Client는 표시와 입력을 담당하고 backend/provider는 검증된 요청만 실행합니다.</p>
+        <div class="architecture-flow" role="img" aria-label="Clients call Workbench core, which invokes backends and providers"><div class="architecture-column"><span>Clients</span><strong>CLI</strong><strong>Dashboard</strong><strong>LazyVim</strong><strong>cmux actions</strong></div><div class="architecture-arrow" aria-hidden="true">→</div><div class="architecture-column core"><span>Control plane</span><strong>Projects</strong><strong>Worktrees</strong><strong>Agent registry</strong><strong>Doctor</strong></div><div class="architecture-arrow" aria-hidden="true">→</div><div class="architecture-column"><span>Execution</span><strong>cmux</strong><strong>tmux / shell</strong><strong>Windows Terminal</strong><strong>Git / binbox</strong></div></div>
+        <h3>요청 흐름</h3><ol class="compact-list"><li>Client가 project ID, task ID, backend 같은 typed input을 전달합니다.</li><li>Core가 config와 registry를 읽고 ID, ownership, platform capability를 검증합니다.</li><li>선택된 adapter가 argument array로 외부 프로그램을 실행합니다.</li><li>결과와 recovery가 CLI envelope 또는 Dashboard snapshot으로 돌아옵니다.</li></ol>
+        <div class="callout warning"><strong>Source of truth</strong><p>cmux, LazyVim, Dashboard는 별도 project/task registry를 만들지 않습니다. Workbench가 unavailable일 때만 문서화된 compatibility fallback을 사용합니다.</p></div>
+      </section>
+      <section id="components" class="guide-section" data-searchable>
+        <span class="eyebrow">Concepts</span><h2>구성 요소와 각각의 역할</h2>
+        <div class="component-grid"><article><span class="component-kind">Core</span><h3><code>wb</code> CLI</h3><p>canonical state, validation, backend selection, JSON contract의 진입점입니다.</p></article><article><span class="component-kind">Client</span><h3>Dashboard</h3><p>상태를 읽고 허용된 action만 실행하는 loopback UI입니다.</p></article><article><span class="component-kind">Client</span><h3>LazyVim</h3><p>비동기 JSON client로 project, Agent, worktree, Doctor picker를 제공합니다.</p></article><article><span class="component-kind">Desktop</span><h3>cmux</h3><p>macOS workspace와 browser surface를 제공하고 generated action으로 <code>wb</code>를 호출합니다.</p></article><article><span class="component-kind">Provider</span><h3>binbox</h3><p>Kubernetes, Terraform, AWS 도구와 legacy tmux pane 관찰을 제공합니다.</p></article><article><span class="component-kind">Backend</span><h3>tmux / shell / WT</h3><p>프로젝트와 Agent process를 실제 terminal 환경에 배치합니다.</p></article></div>
+        <table><thead><tr><th>데이터</th><th>권위 있는 소유자</th><th>Consumer</th></tr></thead><tbody><tr><td>Project metadata</td><td><code>projects.toml</code></td><td>CLI, Dashboard, LazyVim, cmux generator</td></tr><tr><td>Managed worktree</td><td><code>worktrees.json</code> + Git porcelain</td><td>CLI, Dashboard, LazyVim</td></tr><tr><td>Agent task</td><td><code>agents.json</code> + backend identity</td><td>CLI, Dashboard, LazyVim</td></tr><tr><td>Backend priority</td><td>active profile TOML</td><td><code>wb open</code>, Agent start</td></tr><tr><td>Fallback evidence</td><td><code>compatibility/*.json</code></td><td>Doctor</td></tr></tbody></table>
+      </section>
+      <section id="projects-profiles" class="guide-section" data-searchable>
+        <span class="eyebrow">Concepts</span><h2>Projects와 Profiles</h2><p><strong>Project</strong>는 portable ID와 장비별 canonical path를 연결합니다. <strong>Profile</strong>은 backend 우선순위와 editor, Windows Terminal 정책을 묶습니다.</p>
+        <div class="two-column"><article><h3>Project lifecycle</h3><pre><code>wb projects add /absolute/path --id alpha<br>wb projects show alpha --json<br>wb projects list<br>wb projects remove alpha</code></pre><p><code>remove</code>는 registry entry만 삭제합니다.</p></article><article><h3>Profile example</h3><pre><code>schema_version = 1<br>default_backend = "auto"<br>prefer_current_tmux = true<br>backend_priority = ["cmux", "tmux", "shell"]</code></pre></article></div>
+        <h3>Sessionizer migration</h3><pre><code>wb migrate sessionizer --check<br>wb migrate sessionizer --apply</code></pre><p>항상 <code>--check</code>로 diff를 먼저 검토합니다.</p>
+      </section>
+      <section id="backends" class="guide-section" data-searchable>
+        <span class="eyebrow">Concepts</span><h2>Backend 선택과 플랫폼</h2>
+        <table><thead><tr><th>Backend</th><th>환경</th><th>역할</th><th>제한</th></tr></thead><tbody><tr><td>cmux</td><td>macOS</td><td>workspace open/select, Agent workspace</td><td>macOS 전용</td></tr><tr><td>tmux</td><td>macOS, Linux, WSL, SSH</td><td>session/pane와 task ownership</td><td>pane identity 필요</td></tr><tr><td>shell</td><td>Unix 계열</td><td>interactive shell 시작</td><td>Dashboard detached action 제외</td></tr><tr><td>Windows Terminal</td><td>Windows, WSL</td><td>tab/split/window, distro routing</td><td>Windows/WSL path를 추측하지 않음</td></tr></tbody></table>
+        <h3><code>auto</code> 순서</h3><ol class="compact-list"><li>명시한 <code>--backend</code>가 있으면 그것을 검증합니다.</li><li>Project와 active profile default를 확인합니다.</li><li><code>prefer_current_tmux=true</code>이면 현재 tmux를 우선합니다.</li><li><code>backend_priority</code>와 platform fallback을 적용합니다.</li></ol>
+      </section>
+      <section id="worktrees" class="guide-section" data-searchable>
+        <span class="eyebrow">Guides</span><h2>Worktree 운영</h2><p>Git porcelain이 실제 checkout의 권위이며 registry는 <code>wb</code>가 만든 worktree의 stable ID와 ownership만 기록합니다.</p>
+        <pre><code>wb worktrees create alpha feature/api --base main<br>wb worktrees list alpha --json<br>wb worktrees remove wt-alpha-feature-api-1a2b3c4d<br>wb worktrees remove wt-alpha-feature-api-1a2b3c4d --delete-branch</code></pre>
+        <div class="safety-list"><article><strong>Create</strong><span>다른 worktree에서 checkout한 branch는 거부합니다.</span></article><article><strong>Remove</strong><span>managed identity, path, branch를 다시 확인하고 dirty/locked 상태를 거부합니다.</span></article><article><strong>Branch</strong><span>기본은 보존이며 삭제는 exact confirmation과 safe <code>git branch -d</code>를 사용합니다.</span></article></div>
+      </section>
+      <section id="agents" class="guide-section" data-searchable>
+        <span class="eyebrow">Guides</span><h2>Agent tasks와 ownership</h2><p>Workbench task는 Codex/Claude lifecycle과 backend reference를 registry에 기록합니다. 비슷해 보이는 process를 PID나 화면 문자열로 추측해 제어하지 않습니다.</p>
+        <pre><code>wb agents start alpha --agent codex --backend tmux<br>wb agents list --project alpha --json<br>wb agents show task-19c...<br>wb agents jump task-19c...<br>wb agents stop task-19c...</code></pre>
+        <table><thead><tr><th>State</th><th>의미</th><th>동작</th></tr></thead><tbody><tr><td><code>starting</code></td><td>launch 전 registry 생성</td><td>backend reference 대기</td></tr><tr><td><code>running</code></td><td>검증된 identity 활성</td><td>jump/stop capability 확인</td></tr><tr><td><code>waiting</code></td><td>사용자 입력 필요</td><td>task로 jump</td></tr><tr><td><code>idle</code></td><td>활성 상태지만 현재 작업 없음</td><td>jump/stop capability 확인</td></tr><tr><td><code>completed / stopped / failed</code></td><td>terminal state</td><td>기록 검토</td></tr></tbody></table>
+        <div class="callout warning"><strong>Legacy scrape</strong><p><code>state_source=scrape</code>는 compatibility observation이며 Workbench stop authority가 없습니다.</p></div>
+      </section>
+      <section id="dashboard-guide" class="guide-section" data-searchable>
+        <span class="eyebrow">Guides</span><h2>Dashboard 사용법</h2><p>Dashboard는 canonical state를 새로 만들지 않는 thin client입니다. snapshot은 15초마다 그리고 Refresh 후 다시 읽습니다.</p>
+        <div class="component-grid dashboard-map"><article><h3>Projects</h3><p>등록 프로젝트와 Agent 수를 보여주고 선택 context를 바꿉니다.</p></article><article><h3>Project actions</h3><p>Open, Start Codex, Start Claude typed action을 제공합니다.</p></article><article><h3>Metrics</h3><p>Agents, worktrees, Git changes와 branch를 요약합니다.</p></article><article><h3>Panels</h3><p>Agent cards, worktrees, changed files, Doctor를 표시합니다.</p></article><article><h3>Task detail</h3><p>backend ownership을 확인하고 jump/stop을 제공합니다.</p></article><article><h3>Theme</h3><p>System, Light, Dark 선택은 브라우저 localStorage에만 저장됩니다.</p></article></div>
+        <h3>허용된 action</h3><table><thead><tr><th>Action</th><th>입력</th><th>경계</th></tr></thead><tbody><tr><td><code>open_project</code></td><td>project ID, optional backend</td><td>cmux 또는 Windows Terminal</td></tr><tr><td><code>start_agent</code></td><td>project ID, codex/claude</td><td>detached tmux/cmux/WT</td></tr><tr><td><code>jump_agent</code></td><td>registered task ID</td><td>active identity 재검증</td></tr><tr><td><code>stop_agent</code></td><td>registered task ID</td><td>confirmation + ownership 재검증</td></tr></tbody></table>
+      </section>
+      <section id="doctor-operations" class="guide-section" data-searchable>
+        <span class="eyebrow">Operations</span><h2>Doctor, 관측, 복구</h2><pre><code>wb doctor<br>wb doctor --json<br>wb doctor --profile personal --strict</code></pre>
+        <div class="status-grid"><article><span class="status available">available</span><p>검사가 통과했거나 provider/backend를 사용할 수 있습니다.</p></article><article><span class="status unavailable">unavailable</span><p>적용되는 capability가 실패했습니다. recovery를 확인합니다.</p></article><article><span class="status skipped">skipped</span><p>플랫폼에 적용되지 않거나 아직 관찰되지 않았습니다.</p></article></div>
+        <h3>Scope</h3><ul class="compact-list"><li><strong>core</strong>: config/state schema, Git, shell처럼 핵심 workflow에 필요합니다.</li><li><strong>optional</strong>: tmux, cmux, Neovim, Agent CLI처럼 일부 workflow에 필요합니다.</li><li><strong>disabled</strong>: 현재 플랫폼에 적용되지 않으며 strict 실패를 만들지 않습니다.</li></ul>
+        <h3>Compatibility readiness</h3><p><code>compatibility:nvim-projects</code>와 <code>compatibility:agents</code>는 가장 최근에 관찰한 source를 보여줍니다. 최신 fallback은 optional unavailable입니다.</p>
+        <div class="callout warning"><strong>자동 삭제 금지</strong><p>timestamp는 advisory evidence입니다. clock rollback, 다른 장비, 미실행 workflow가 있으므로 fallback 제거 권한이 아닙니다.</p></div>
+      </section>
+      <section id="security" class="guide-section" data-searchable>
+        <span class="eyebrow">Operations</span><h2>보안 모델</h2>
+        <div class="safety-list"><article><strong>Loopback only</strong><span><code>127.0.0.1</code>에만 bind합니다.</span></article><article><strong>Same origin</strong><span>action은 runtime token과 동일 origin을 요구합니다.</span></article><article><strong>Typed input</strong><span>임의 command/path/prompt 필드가 없습니다.</span></article><article><strong>Bounded body</strong><span>16 KiB 제한과 strict JSON decode를 사용합니다.</span></article><article><strong>Revalidation</strong><span>mutation 전에 Git/backend identity를 다시 확인합니다.</span></article><article><strong>Local assets</strong><span>원격 font, analytics, image, script를 로드하지 않습니다.</span></article></div>
+        <p>Dashboard와 Guide는 restrictive CSP, frame denial, no-referrer, no-sniff, no-store를 사용합니다. Theme preference만 device-local localStorage에 저장됩니다.</p>
+      </section>
+      <section id="cli-reference" class="guide-section" data-searchable>
+        <span class="eyebrow">Reference</span><h2>CLI reference</h2>
+        <div class="reference-groups"><article><h3>Projects</h3><pre><code>wb projects list [--json]<br>wb projects show &lt;id&gt; [--json]<br>wb projects add &lt;path&gt; [--id &lt;id&gt;] [--profile &lt;profile&gt;]<br>wb projects remove &lt;id&gt;</code></pre></article><article><h3>Open</h3><pre><code>wb open &lt;project-id&gt; [--backend &lt;backend&gt;]<br>  [--window &lt;last|new|id&gt;]<br>  [--terminal-mode &lt;mode&gt;]</code></pre></article><article><h3>Worktrees</h3><pre><code>wb worktrees list &lt;project-id&gt; [--json]<br>wb worktrees create &lt;project-id&gt; &lt;branch&gt; [--base &lt;ref&gt;]<br>wb worktrees remove &lt;worktree-id&gt; [--delete-branch]</code></pre></article><article><h3>Agents</h3><pre><code>wb agents list [--project &lt;id&gt;] [--json]<br>wb agents show &lt;task-id&gt; [--json]<br>wb agents start &lt;project-id&gt; --agent codex|claude<br>  [--worktree &lt;id&gt;] [--backend &lt;backend&gt;]<br>wb agents jump &lt;task-id&gt;<br>wb agents stop &lt;task-id&gt;</code></pre></article><article><h3>Health and UI</h3><pre><code>wb doctor [--profile &lt;name&gt;] [--json] [--strict]<br>wb dashboard [--open auto|cmux|browser|none] [--port &lt;port&gt;]<br>wb config validate</code></pre></article><article><h3>Migration</h3><pre><code>wb migrate sessionizer --check|--apply<br>wb compatibility observe --client &lt;client&gt;<br>  --feature &lt;feature&gt; --source &lt;source&gt;</code></pre></article></div>
+        <h3>Exit codes</h3><table><thead><tr><th>Code</th><th>Meaning</th><th>대표 상황</th></tr></thead><tbody><tr><td>0</td><td>OK</td><td>요청 완료</td></tr><tr><td>1</td><td>General</td><td>state/provider/Doctor 실패</td></tr><tr><td>2</td><td>Argument</td><td>옵션, config, profile 오류</td></tr><tr><td>3</td><td>Unavailable</td><td>backend/provider 미사용 가능</td></tr><tr><td>4</td><td>Conflict</td><td>unsafe ownership, dirty worktree</td></tr><tr><td>5</td><td>Partial</td><td>일부 변경 후 recovery 필요</td></tr></tbody></table>
+      </section>
+      <section id="config-reference" class="guide-section" data-searchable>
+        <span class="eyebrow">Reference</span><h2>Configuration reference</h2>
+        <div class="two-column"><article><h3>Unix / WSL</h3><pre><code>${XDG_CONFIG_HOME:-~/.config}/workbench/<br>  config.toml · projects.toml · profiles/*.toml<br><br>${XDG_STATE_HOME:-~/.local/state}/workbench/<br>  agents.json · worktrees.json<br>  compatibility/*.json · backups/</code></pre></article><article><h3>Native Windows</h3><pre><code>%APPDATA%\workbench\<br>  config.toml · projects.toml · profiles\*.toml<br><br>%LOCALAPPDATA%\workbench\<br>  agents.json · worktrees.json<br>  compatibility\*.json · backups\</code></pre></article></div>
+        <table><thead><tr><th>Profile field</th><th>의미</th></tr></thead><tbody><tr><td><code>default_backend</code></td><td>기본 backend 또는 <code>auto</code></td></tr><tr><td><code>prefer_current_tmux</code></td><td>현재 tmux client 우선 보존</td></tr><tr><td><code>backend_priority</code></td><td>concrete backend 순서</td></tr><tr><td><code>editor</code></td><td>editor command</td></tr><tr><td><code>windows_terminal_profile</code></td><td>profile 이름 또는 GUID</td></tr><tr><td><code>windows_terminal_distro</code></td><td>WSL distro override</td></tr><tr><td><code>windows_terminal_window</code></td><td><code>last</code>, <code>new</code>, window ID/name</td></tr><tr><td><code>windows_terminal_mode</code></td><td>tab 또는 split mode</td></tr></tbody></table>
+      </section>
+      <section id="data-reference" class="guide-section" data-searchable>
+        <span class="eyebrow">Reference</span><h2>Data와 HTTP API</h2><h3>JSON envelope</h3><pre><code>{<br>  "schema_version": 1,<br>  "ok": true,<br>  "data": { ... },<br>  "warnings": [],<br>  "error": null<br>}</code></pre><p>machine-readable output은 stdout에 envelope 하나만 쓰며 실패도 수집 가능한 <code>data</code>를 보존할 수 있습니다.</p>
+        <h3>Dashboard API</h3><table><thead><tr><th>Endpoint</th><th>Method</th><th>Contract</th></tr></thead><tbody><tr><td><code>/api/v1/snapshot</code></td><td>GET</td><td>projects, Agents, worktrees, changes, Doctor</td></tr><tr><td><code>/api/v1/actions</code></td><td>POST</td><td>same-origin token typed action</td></tr><tr><td><code>/guide</code></td><td>GET/HEAD</td><td>바이너리에 포함된 현재 문서</td></tr></tbody></table>
+        <h3>Atomic state</h3><p>Registry write는 mode 0600 same-directory temporary file, flush, rename을 사용합니다. compatibility observation은 bounded per-tuple state라 timestamp backup을 만들지 않습니다.</p>
+      </section>
+      <section id="troubleshooting" class="guide-section" data-searchable>
+        <span class="eyebrow">Operations</span><h2>문제 해결</h2>
+        <div class="troubleshooting-list"><details open><summary><span>01</span><strong><code>wb</code>를 찾을 수 없습니다.</strong></summary><p><code>make install</code> 후 <code>~/.local/bin</code>이 <code>PATH</code>에 있는지 확인합니다.</p></details><details><summary><span>02</span><strong><code>wb open</code>이 예상하지 않은 terminal을 선택합니다.</strong></summary><p><code>wb doctor</code>, <code>prefer_current_tmux</code>, <code>backend_priority</code>를 확인하고 <code>--backend</code>로 selection 문제를 분리합니다.</p></details><details><summary><span>03</span><strong>Worktree를 제거할 수 없습니다.</strong></summary><p><code>git status</code>와 managed/dirty/locked 여부를 확인합니다. Workbench는 <code>--force</code>를 사용하지 않습니다.</p></details><details><summary><span>04</span><strong>Agent jump/stop이 거부됩니다.</strong></summary><p><code>wb agents show</code>로 backend reference와 state source를 확인합니다. safely reconnectable하지 않으면 추측 제어를 하지 않습니다.</p></details><details><summary><span>05</span><strong>Dashboard action이 403입니다.</strong></summary><p>같은 URL과 origin을 사용하고 오래된 tab은 새로고침합니다. token은 process마다 새로 생성됩니다.</p></details><details><summary><span>06</span><strong>Doctor strict만 실패합니다.</strong></summary><p>optional unavailable을 확인하고 이 장비에서 해당 workflow가 필수인지 판단합니다.</p></details><details><summary><span>07</span><strong>Fallback 제거 시점을 모르겠습니다.</strong></summary><p>대표 사용 주기, 다른 장비, clean profile, rollback을 함께 검토합니다. point-in-time available만으로 삭제하지 않습니다.</p></details></div>
+      </section>
+      <section id="glossary" class="guide-section" data-searchable>
+        <span class="eyebrow">Reference</span><h2>용어집</h2>
+        <dl class="glossary"><dt>Control plane</dt><dd>상태, validation, selection policy를 소유하는 <code>wb</code> core.</dd><dt>Client</dt><dd>Workbench API를 소비하는 Dashboard, LazyVim, cmux action.</dd><dt>Backend</dt><dd>프로젝트나 Agent를 terminal surface에 배치하는 adapter.</dd><dt>Provider</dt><dd>Git 또는 binbox처럼 구체 capability를 제공하는 계층.</dd><dt>Registry</dt><dd>portable ID와 ownership을 기록하는 versioned local state.</dd><dt>Agent task</dt><dd>Codex/Claude 실행과 backend reference를 연결한 lifecycle record.</dd><dt>Capability</dt><dd>Doctor가 scope, status, reason, recovery로 보고하는 사용 가능 단위.</dd><dt>Compatibility observation</dt><dd>primary 또는 fallback이 선택된 최신 시점의 advisory evidence.</dd></dl>
+        <div class="guide-footer"><strong>Workbench documentation</strong><p>이 문서는 실행 중인 바이너리와 함께 배포됩니다. 정확한 현재 계약은 source와 tests가 최종 권위입니다.</p><a href="#overview">맨 위로</a></div>
+      </section>
+    </main>
+    <aside class="guide-toc" aria-label="이 페이지"><strong>On this page</strong><a href="#overview">Overview</a><a href="#architecture">Architecture</a><a href="#components">Components</a><a href="#dashboard-guide">Dashboard</a><a href="#cli-reference">CLI reference</a><a href="#troubleshooting">Troubleshooting</a><div class="guide-toc-note"><span>Local documentation</span><p>외부 네트워크 요청 없이 제공됩니다.</p></div></aside>
+  </div>
+  <script src="/assets/guide.js" defer></script>
+</body>
+</html>

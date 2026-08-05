@@ -3,6 +3,16 @@
 The Dashboard is a client of the Workbench core. It does not become a daemon or
 a second state owner and does not parse browser-side copies of registry files.
 
+The embedded web surface has two product routes:
+
+| Route | Purpose |
+|---|---|
+| `/` | Operational Dashboard for projects, Agent tasks, worktrees, Git state, and Doctor |
+| `/guide` | Searchable, offline product documentation shipped with the current binary |
+
+`/docs` is an alias for `/guide`. Both pages share the same System, Light, and
+Dark theme control.
+
 ## Start and stop
 
 ```bash
@@ -34,6 +44,39 @@ reachable address is not configurable.
 The browser refreshes this snapshot every 15 seconds and on demand. Project,
 Agent, worktree, change, and capability state stays read-only in the UI.
 
+## Appearance
+
+The **Theme** selector provides three options:
+
+- `System` follows `prefers-color-scheme` and updates when the operating-system
+  appearance changes;
+- `Light` uses the warm-paper light palette regardless of the system setting;
+- `Dark` uses the graphite dark palette regardless of the system setting.
+
+The preference is shared by the Dashboard and Guide using the browser-local key
+`workbench.dashboard.theme.v1`. It is not written to Workbench configuration or
+state, sent to an API, or synchronized between browsers. If storage is blocked,
+the selected theme still applies to the current page but is not persisted.
+
+## Embedded Guide
+
+The Guide follows the same information architecture used by mature operations
+projects: overview and quickstart, architecture and concepts, task-oriented
+guides, reference, operations, troubleshooting, and a glossary. It documents
+only implemented behavior in the binary that serves it.
+
+The current guide covers:
+
+- the Workbench control-plane architecture and request flow;
+- the roles of the CLI, Dashboard, LazyVim, cmux, binbox, and terminal backends;
+- projects, profiles, backend selection, managed worktrees, and Agent lifecycle;
+- Dashboard and Doctor operations, the security model, and fallback evidence;
+- the CLI, configuration, local data, HTTP API, exit codes, and troubleshooting.
+
+Search filters whole sections as the user types. `Escape` clears the query.
+Section navigation follows the currently visible heading, the layout collapses
+for narrow screens, and print styles remove the navigation chrome.
+
 ## Typed actions
 
 `POST /api/v1/actions` accepts only these action IDs and their typed fields:
@@ -59,6 +102,8 @@ contract exists.
 - request JSON has a 16 KiB limit and rejects unknown fields or trailing values;
 - responses do not enable CORS and use a restrictive Content Security Policy,
   frame denial, no-referrer, no-sniff, and no-store headers;
+- Guide, theme, CSS, and JavaScript assets are embedded in the binary and make
+  no remote font, image, analytics, or other network requests;
 - project and task values are passed to backends as argument arrays.
 
 The token is runtime-only. It is never written to Workbench state, logs, or a
@@ -67,7 +112,9 @@ committed asset.
 ## Verification
 
 Handler tests cover the versioned envelope, action token and origin checks,
-unknown-field rejection, loopback binding, and listener shutdown. Fake
-executors verify browser/cmux command arrays and Git status arguments. The UI
-JavaScript is syntax-checked without starting a browser. A final visual and
-interactive action smoke remains a target-machine check.
+unknown-field rejection, Dashboard/Guide routes and embedded assets, loopback
+binding, and listener shutdown. Node tests exercise theme defaulting,
+persistence, invalid values, and unavailable localStorage. Fake executors verify
+browser/cmux command arrays and Git status arguments. The UI JavaScript is
+syntax-checked without starting a browser, and the release verification includes
+a browser smoke for theme switching, Guide search, and responsive navigation.

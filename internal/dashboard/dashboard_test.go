@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,6 +46,52 @@ func TestHandlerServesVersionedSnapshotWithSecurityHeaders(t *testing.T) {
 	}
 	if !envelope.OK || envelope.SchemaVersion != 1 {
 		t.Fatalf("unexpected envelope: %#v", envelope)
+	}
+}
+
+func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
+	handler, err := NewHandler(&fakeService{}, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		path        string
+		contentType string
+		contains    []string
+	}{
+		{path: "/", contentType: "text/html", contains: []string{`id="theme-select"`, `href="/guide"`, `/assets/theme.js`}},
+		{path: "/guide", contentType: "text/html", contains: []string{`id="guide-search"`, `id="architecture"`, `id="cli-reference"`, `id="troubleshooting"`}},
+		{path: "/assets/theme.js", contentType: "text/javascript", contains: []string{"workbench.dashboard.theme.v1", "localStorage"}},
+		{path: "/assets/guide.js", contentType: "text/javascript", contains: []string{"guide-search", "IntersectionObserver"}},
+		{path: "/assets/style.css", contentType: "text/css", contains: []string{"prefers-color-scheme: light", `data-theme="light"`}},
+	}
+	for _, test := range tests {
+		t.Run(test.path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+			if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Type"), test.contentType) {
+				t.Fatalf("unexpected response: status=%d content-type=%q", response.Code, response.Header().Get("Content-Type"))
+			}
+			if response.Header().Get("Content-Security-Policy") == "" {
+				t.Fatal("security headers missing")
+			}
+			for _, fragment := range test.contains {
+				if !strings.Contains(response.Body.String(), fragment) {
+					t.Fatalf("response %s is missing %q", test.path, fragment)
+				}
+			}
+		})
+	}
+}
+
+func TestDashboardJavaScriptBehavior(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is unavailable")
+	}
+	command := exec.Command(node, "--test", "testdata/theme_test.mjs", "testdata/guide_test.mjs")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("dashboard JavaScript tests failed: %v\n%s", err, output)
 	}
 }
 
