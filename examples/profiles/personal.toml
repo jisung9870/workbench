@@ -1,0 +1,6 @@
+schema_version = 1
+default_backend = "auto"
+prefer_current_tmux = true
+backend_priority = ["cmux", "tmux", "shell"]
+editor = "nvim"
+

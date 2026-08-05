@@ -79,7 +79,8 @@ schema_version = 1
 active_profile = "personal"
 ```
 
-Profile files support `schema_version`, `default_backend`, `editor`,
+Profile files support `schema_version`, `default_backend`,
+`prefer_current_tmux`, `backend_priority`, `editor`,
 `windows_terminal_profile`, `windows_terminal_distro`,
 `windows_terminal_window`, and `windows_terminal_mode`.
 Unknown TOML fields, unsupported schema versions, and parser errors fail
@@ -112,12 +113,19 @@ Terminal launch preferences:
 ```toml
 schema_version = 1
 default_backend = "auto"
+prefer_current_tmux = true
+backend_priority = ["cmux", "tmux", "shell"]
 editor = "nvim"
 windows_terminal_profile = "Ubuntu-24.04"
 windows_terminal_distro = "Ubuntu-24.04"
 windows_terminal_window = "last"
 windows_terminal_mode = "tab"
 ```
+
+The repository includes the same macOS-oriented starting point at
+`examples/profiles/personal.toml`. Copy it to
+`${XDG_CONFIG_HOME:-~/.config}/workbench/profiles/personal.toml` and adjust the
+ordered list for a machine when needed.
 
 `windows_terminal_profile` accepts the installed profile name or GUID. Window
 values are `last`, `new`, or a window ID/name. Modes are `tab`, `split-auto`,
@@ -127,12 +135,15 @@ both. See [Windows Terminal and WSL](docs/windows-terminal.md).
 
 ## Opening a project
 
-`--backend` always wins. With `auto`, `wb` tries the project's
-`default_backend`, the active profile default, native Windows Terminal, cmux on
-macOS outside SSH, tmux in tmux/SSH/WSL environments, and finally the user's
-shell. An unavailable configured preference produces a warning before a safe
-fallback; an explicitly requested unavailable backend exits with code 3 and
-lists usable alternatives.
+`--backend` always wins. With `auto`, `wb` first tries the project's
+`default_backend` and the active profile default. When `prefer_current_tmux` is
+true (the default), an existing tmux client is preserved before any other auto
+backend is considered. A non-empty `backend_priority` then controls the
+remaining concrete backend order; `auto` and duplicate entries are rejected.
+Unavailable priority entries fall through to the built-in order: native Windows
+Terminal, cmux on macOS outside SSH, tmux in tmux/SSH/WSL environments, and
+finally the user's shell. An explicitly requested unavailable backend exits
+with code 3 and lists usable alternatives.
 
 ```bash
 wb open terraform-lab

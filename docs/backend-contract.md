@@ -19,10 +19,20 @@ Selection order for `auto` is:
 
 1. project `default_backend`
 2. active profile `default_backend`
-3. Windows Terminal on native Windows
-4. cmux capability on macOS when not in SSH
-5. tmux when already in tmux, SSH, or WSL
-6. shell
+3. current tmux client when profile `prefer_current_tmux` is true (default)
+4. profile `backend_priority` when configured
+5. otherwise Windows Terminal on native Windows
+6. otherwise cmux capability on macOS when not in SSH
+7. otherwise tmux in tmux, SSH, or WSL
+8. shell
+
+`backend_priority` accepts an ordered, duplicate-free list of concrete
+backends (`cmux`, `windows-terminal`, `tmux`, `shell`). It does not accept
+`auto`. cmux remains excluded from SSH auto-selection even when listed. Setting
+`prefer_current_tmux = false` allows the configured list to choose cmux before
+tmux while running inside a tmux pane. Unavailable entries are skipped before
+the built-in platform fallback is evaluated; the list is a preference, not an
+allowlist.
 
 Explicit `--backend` bypasses this order. An unavailable explicit backend does
 not launch a fallback automatically. Auto mode may skip a backend only during

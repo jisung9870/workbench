@@ -63,8 +63,50 @@ func TestLoadProfileUsesWindowsTerminalDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.WindowsTerminalWindow != "last" || profile.WindowsTerminalMode != "tab" {
+	if profile.WindowsTerminalWindow != "last" || profile.WindowsTerminalMode != "tab" || !profile.PreferCurrentTmux {
 		t.Fatalf("unexpected Windows Terminal defaults: %#v", profile)
+	}
+}
+
+func TestLoadProfileAcceptsBackendSelectionPreferences(t *testing.T) {
+	root := t.TempDir()
+	paths := Paths{ProfilesDir: filepath.Join(root, "profiles")}
+	if err := os.MkdirAll(paths.ProfilesDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contents := "schema_version = 1\nprefer_current_tmux = false\nbackend_priority = [\"cmux\", \"tmux\", \"shell\"]\n"
+	if err := os.WriteFile(filepath.Join(paths.ProfilesDir, "personal.toml"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := LoadProfile(paths, "personal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.PreferCurrentTmux || strings.Join(profile.BackendPriority, ",") != "cmux,tmux,shell" {
+		t.Fatalf("unexpected backend preferences: %#v", profile)
+	}
+}
+
+func TestLoadProfileRejectsInvalidBackendPriority(t *testing.T) {
+	tests := []string{
+		"backend_priority = [\"auto\", \"shell\"]\n",
+		"backend_priority = [\"cmux\", \"cmux\"]\n",
+		"backend_priority = [\"unknown\"]\n",
+	}
+	for _, extra := range tests {
+		t.Run(strings.TrimSpace(extra), func(t *testing.T) {
+			root := t.TempDir()
+			paths := Paths{ProfilesDir: filepath.Join(root, "profiles")}
+			if err := os.MkdirAll(paths.ProfilesDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(paths.ProfilesDir, "personal.toml"), []byte("schema_version = 1\n"+extra), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadProfile(paths, "personal"); err == nil {
+				t.Fatalf("invalid backend priority was accepted: %s", extra)
+			}
+		})
 	}
 }
 

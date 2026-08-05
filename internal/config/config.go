@@ -19,13 +19,15 @@ type Settings struct {
 }
 
 type Profile struct {
-	SchemaVersion          int    `toml:"schema_version"`
-	DefaultBackend         string `toml:"default_backend"`
-	Editor                 string `toml:"editor"`
-	WindowsTerminalProfile string `toml:"windows_terminal_profile"`
-	WindowsTerminalDistro  string `toml:"windows_terminal_distro"`
-	WindowsTerminalWindow  string `toml:"windows_terminal_window"`
-	WindowsTerminalMode    string `toml:"windows_terminal_mode"`
+	SchemaVersion          int      `toml:"schema_version"`
+	DefaultBackend         string   `toml:"default_backend"`
+	PreferCurrentTmux      bool     `toml:"prefer_current_tmux"`
+	BackendPriority        []string `toml:"backend_priority"`
+	Editor                 string   `toml:"editor"`
+	WindowsTerminalProfile string   `toml:"windows_terminal_profile"`
+	WindowsTerminalDistro  string   `toml:"windows_terminal_distro"`
+	WindowsTerminalWindow  string   `toml:"windows_terminal_window"`
+	WindowsTerminalMode    string   `toml:"windows_terminal_mode"`
 }
 
 func DefaultSettings() Settings {
@@ -54,7 +56,7 @@ func LoadSettings(path string) (Settings, error) {
 
 func DefaultProfile() Profile {
 	return Profile{
-		SchemaVersion: SchemaVersion, DefaultBackend: "auto", Editor: "nvim",
+		SchemaVersion: SchemaVersion, DefaultBackend: "auto", PreferCurrentTmux: true, Editor: "nvim",
 		WindowsTerminalWindow: "last", WindowsTerminalMode: "tab",
 	}
 }
@@ -68,7 +70,8 @@ func LoadProfile(paths Paths, name string) (Profile, error) {
 	}
 	profile := Profile{}
 	path := filepath.Join(paths.ProfilesDir, name+".toml")
-	if err := decodeExactFile(path, &profile); err != nil {
+	metadata, err := decodeExactFileMetadata(path, &profile)
+	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return DefaultProfile(), nil
 		}
@@ -79,6 +82,9 @@ func LoadProfile(paths Paths, name string) (Profile, error) {
 	}
 	if profile.DefaultBackend == "" {
 		profile.DefaultBackend = "auto"
+	}
+	if !metadata.IsDefined("prefer_current_tmux") {
+		profile.PreferCurrentTmux = true
 	}
 	if profile.Editor == "" {
 		profile.Editor = "nvim"
@@ -91,6 +97,9 @@ func LoadProfile(paths Paths, name string) (Profile, error) {
 	}
 	if !ValidBackend(profile.DefaultBackend) {
 		return Profile{}, fmt.Errorf("%s: invalid default_backend %q", path, profile.DefaultBackend)
+	}
+	if err := ValidateBackendPriority(profile.BackendPriority); err != nil {
+		return Profile{}, fmt.Errorf("%s: %w", path, err)
 	}
 	if !ValidWindowsTerminalWindow(profile.WindowsTerminalWindow) {
 		return Profile{}, fmt.Errorf("%s: invalid windows_terminal_window %q", path, profile.WindowsTerminalWindow)
@@ -129,6 +138,20 @@ func ValidBackend(name string) bool {
 	}
 }
 
+func ValidateBackendPriority(values []string) error {
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		if value == "auto" || !ValidBackend(value) {
+			return fmt.Errorf("invalid backend_priority entry %q", value)
+		}
+		if _, exists := seen[value]; exists {
+			return fmt.Errorf("duplicate backend_priority entry %q", value)
+		}
+		seen[value] = struct{}{}
+	}
+	return nil
+}
+
 func Validate(paths Paths) error {
 	if _, err := LoadSettings(paths.ConfigFile); err != nil {
 		return err
@@ -154,6 +177,9 @@ func Validate(paths Paths) error {
 		}
 		if profile.DefaultBackend != "" && !ValidBackend(profile.DefaultBackend) {
 			return fmt.Errorf("%s: invalid default_backend %q", path, profile.DefaultBackend)
+		}
+		if err := ValidateBackendPriority(profile.BackendPriority); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
 		}
 		if profile.WindowsTerminalWindow != "" && !ValidWindowsTerminalWindow(profile.WindowsTerminalWindow) {
 			return fmt.Errorf("%s: invalid windows_terminal_window %q", path, profile.WindowsTerminalWindow)
@@ -208,12 +234,17 @@ func ValidWindowsTerminalDistro(value string) bool {
 }
 
 func decodeExactFile(path string, value any) error {
+	_, err := decodeExactFileMetadata(path, value)
+	return err
+}
+
+func decodeExactFileMetadata(path string, value any) (toml.MetaData, error) {
 	metadata, err := toml.DecodeFile(path, value)
 	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+		return toml.MetaData{}, fmt.Errorf("%s: %w", path, err)
 	}
 	if undecoded := metadata.Undecoded(); len(undecoded) > 0 {
-		return fmt.Errorf("%s: unknown field %q", path, undecoded[0].String())
+		return toml.MetaData{}, fmt.Errorf("%s: unknown field %q", path, undecoded[0].String())
 	}
-	return nil
+	return metadata, nil
 }

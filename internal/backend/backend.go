@@ -151,6 +151,22 @@ func (registry *Registry) Select(ctx context.Context, request OpenRequest, reque
 	if adapter := try(Name(request.Profile.DefaultBackend), "profile default", true); adapter != nil {
 		return Selection{Adapter: adapter, Warnings: warnings}, nil
 	}
+	if request.Profile.PreferCurrentTmux && registry.env.get("TMUX") != "" {
+		if adapter := try(Tmux, "current tmux client", true); adapter != nil {
+			return Selection{Adapter: adapter, Warnings: warnings}, nil
+		}
+	}
+	if len(request.Profile.BackendPriority) > 0 {
+		for _, configured := range request.Profile.BackendPriority {
+			name := Name(configured)
+			if name == CMUX && registry.env.IsSSH() {
+				continue
+			}
+			if adapter := try(name, "profile backend_priority", false); adapter != nil {
+				return Selection{Adapter: adapter, Warnings: warnings}, nil
+			}
+		}
+	}
 	if registry.env.GOOS == "windows" {
 		if adapter := try(WindowsTerminal, "Windows native auto-detection", false); adapter != nil {
 			return Selection{Adapter: adapter, Warnings: warnings}, nil
