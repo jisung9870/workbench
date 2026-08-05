@@ -36,6 +36,7 @@ wb agents show <task-id> [--json]
 wb agents start <project-id> --agent codex|claude [--worktree <id>] [--backend <backend>]
 wb agents jump <task-id>
 wb agents stop <task-id>
+wb compatibility observe --client <client> --feature <feature> --source <source>
 wb doctor [--profile <name>] [--json] [--strict]
 wb dashboard [--open auto|cmux|browser|none] [--port <0-65535>]
 wb config validate
@@ -58,6 +59,7 @@ ${XDG_CONFIG_HOME:-~/.config}/workbench/profiles/*.toml
 ${XDG_STATE_HOME:-~/.local/state}/workbench/backups/
 ${XDG_STATE_HOME:-~/.local/state}/workbench/worktrees.json
 ${XDG_STATE_HOME:-~/.local/state}/workbench/agents.json
+${XDG_STATE_HOME:-~/.local/state}/workbench/compatibility/*.json
 ```
 
 Native Windows uses `%APPDATA%\workbench` for configuration and
@@ -246,7 +248,8 @@ contract.
 
 `wb doctor` checks the Workbench configuration and project/Agent/worktree state
 schemas, required Git and shell capabilities, optional terminal backends,
-binbox, Neovim, Codex, and Claude Code.
+binbox, Neovim, Codex, Claude Code, and the latest observed compatibility
+source for Neovim projects and Agent lists.
 
 ```bash
 wb doctor
@@ -259,6 +262,14 @@ optional tools remain visible as warnings. `--strict` also fails on optional
 misses, which is useful for a fully provisioned machine check. JSON failures
 retain the complete capability report in `data` instead of discarding the
 successfully collected checks.
+
+Compatibility observations are a fixed, local allowlist written as one atomic
+mode-0600 JSON file per tuple. No observation is `skipped`; a latest primary
+source is `available`, while a latest fallback source is optional
+`unavailable`. These timestamps are advisory evidence for a representative
+usage cycle, not automatic deletion authority. Clock rollback can make recency
+ordering unreliable, so fallback removal still requires a human-reviewed usage
+window and regression results.
 
 cmux is `disabled/skipped` outside macOS. Windows Terminal is
 `disabled/skipped` outside native Windows and WSL. A platform-disabled backend

@@ -19,6 +19,7 @@ import (
 	wtadapter "github.com/jisung9870/workbench/adapters/windows_terminal"
 	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/backend"
+	"github.com/jisung9870/workbench/internal/compatibility"
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/doctor"
 	"github.com/jisung9870/workbench/internal/migrate"
@@ -70,6 +71,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		commandErr = runWorktrees(args[1:], paths, stdout, stderr)
 	case "agents":
 		commandErr = runAgents(args[1:], paths, stdout, stderr)
+	case "compatibility":
+		commandErr = runCompatibility(args[1:], paths, stdout)
 	case "doctor":
 		commandErr = runDoctor(args[1:], paths, stdout, stderr)
 	case "dashboard":
@@ -187,6 +190,9 @@ func runAgents(args []string, paths config.Paths, stdout, stderr io.Writer) *com
 		if err != nil {
 			return agentError(err)
 		}
+		if err := compatibility.NewStore(paths.CompatibilityDir).Observe("workbench", "agents", "registry", time.Now().UTC()); err != nil {
+			warnings = append(warnings, fmt.Sprintf("record Agent registry observation: %v", err))
+		}
 		if _, jsonMode := options["--json"]; jsonMode {
 			if err := output.Write(stdout, map[string]any{"agents": tasks}, warnings); err != nil {
 				return generalError(err)
@@ -269,6 +275,25 @@ func runAgents(args []string, paths config.Paths, stdout, stderr io.Writer) *com
 	default:
 		return invalid("unknown agents subcommand %q", args[0])
 	}
+}
+
+func runCompatibility(args []string, paths config.Paths, stdout io.Writer) *commandError {
+	if len(args) == 0 || args[0] != "observe" {
+		return invalid("usage: wb compatibility observe --client <client> --feature <feature> --source <source>")
+	}
+	positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--client": true, "--feature": true, "--source": true})
+	if parseErr != nil || len(positionals) != 0 || options["--client"] == "" || options["--feature"] == "" || options["--source"] == "" {
+		return invalid("usage: wb compatibility observe --client <client> --feature <feature> --source <source>")
+	}
+	client, feature, source := options["--client"], options["--feature"], options["--source"]
+	if err := compatibility.ValidateExternal(client, feature, source); err != nil {
+		return invalid("%s", err)
+	}
+	if err := compatibility.NewStore(paths.CompatibilityDir).Observe(client, feature, source, time.Now().UTC()); err != nil {
+		return generalError(err)
+	}
+	fmt.Fprintf(stdout, "observed %s/%s/%s\n", client, feature, source)
+	return nil
 }
 
 func newAgentManager(paths config.Paths, stdout, stderr io.Writer) *agents.Manager {
@@ -752,6 +777,7 @@ Usage:
   wb agents start <project-id> --agent codex|claude [--worktree <id>] [--backend <backend>]
   wb agents jump <task-id>
   wb agents stop <task-id>
+  wb compatibility observe --client <client> --feature <feature> --source <source>
   wb doctor [--profile <name>] [--json] [--strict]
   wb dashboard [--open auto|cmux|browser|none] [--port <0-65535>]
   wb config validate

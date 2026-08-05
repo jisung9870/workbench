@@ -24,13 +24,35 @@ Every capability has independent `scope` and `status` fields.
 | `skipped` | Platform-disabled check was deliberately not required |
 
 Core checks currently cover settings/profile validation, schema-v1 project,
-Agent and worktree registries, Git, and the shell backend. tmux, binbox,
+Agent, worktree, and compatibility state, Git, and the shell backend. tmux, binbox,
 Neovim, Codex, and Claude are optional. cmux is skipped outside macOS; Windows
 Terminal is skipped outside native Windows and WSL.
 
 Registered project paths are reported individually as optional capabilities.
 This makes a stale machine-specific path visible without making every other
 registered project or core state unusable.
+
+## Compatibility readiness
+
+Two optional capabilities summarize the latest local source observation:
+
+- `compatibility:nvim-projects`: primary `nvim/projects/workbench`; fallbacks
+  `nvim/projects/binbox` and `nvim/projects/sessionizer`.
+- `compatibility:agents`: primary `workbench/agents/registry`; fallback
+  `binbox/agents/scrape`.
+
+With no observations, the capability is `skipped`. A latest primary observation
+is `available`; a latest fallback observation is `unavailable`, so default
+doctor remains healthy but strict doctor is not removal-ready. Observations are
+stored below the Workbench state directory as five allowlisted per-tuple JSON
+files. Consumer-side recording is best effort and never changes the original
+project or Agent command result.
+
+The timestamps only show the most recently observed source on this machine.
+They do not prove that every workflow or machine used the primary path, and a
+wall-clock rollback can distort ordering. Never delete a fallback solely from
+this capability; review a representative usage period and the relevant
+regression tests first.
 
 ## JSON result
 

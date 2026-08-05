@@ -10,6 +10,7 @@ import (
 
 	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/backend"
+	"github.com/jisung9870/workbench/internal/compatibility"
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/projects"
 	"github.com/jisung9870/workbench/internal/worktrees"
@@ -139,6 +140,21 @@ func (manager *Manager) Run(ctx context.Context, requestedProfile string) Report
 	_, worktreeErr := worktrees.NewStateStore(manager.paths).Load()
 	add(checkResult("worktrees-state", Core, "schema-v1 managed worktree registry", worktreeErr, "fix worktrees.json or restore a backup"))
 
+	observations, compatibilityErr := compatibility.NewStore(manager.paths.CompatibilityDir).Load()
+	add(checkResult("compatibility-state", Core, "bounded compatibility observations", compatibilityErr, "remove or repair the invalid compatibility observation file"))
+	if compatibilityErr == nil {
+		add(compatibilityCapability("compatibility:nvim-projects", "Neovim project source readiness", observations,
+			func(observation compatibility.Observation) bool {
+				return observation.Client == "nvim" && observation.Feature == "projects"
+			},
+			func(observation compatibility.Observation) bool { return observation.Source == "workbench" }))
+		add(compatibilityCapability("compatibility:agents", "Agent registry source readiness", observations,
+			func(observation compatibility.Observation) bool { return observation.Feature == "agents" },
+			func(observation compatibility.Observation) bool {
+				return observation.Client == "workbench" && observation.Source == "registry"
+			}))
+	}
+
 	add(manager.command(ctx, toolSpec{Name: "git", Scope: Core, Description: "worktree and repository provider", VersionArgs: []string{"--version"}, Recovery: manager.installHint("brew install git", "sudo apt install git", "install Git for Windows")}))
 	for _, tool := range []toolSpec{
 		{Name: "bb", Scope: Optional, Description: "binbox compatibility provider", Recovery: "install or link binbox so bb is on PATH"},
@@ -178,6 +194,31 @@ func (manager *Manager) Run(ctx context.Context, requestedProfile string) Report
 
 	report.Summary = summarize(report.Capabilities)
 	return report
+}
+
+func compatibilityCapability(name, description string, observations []compatibility.Observation, matches, primary func(compatibility.Observation) bool) Capability {
+	capability := Capability{Name: name, Scope: Optional, Status: Skipped, Description: description}
+	var latest *compatibility.Observation
+	for index := range observations {
+		observation := &observations[index]
+		if matches(*observation) && (latest == nil || observation.LastObservedAt.After(latest.LastObservedAt)) {
+			latest = observation
+		}
+	}
+	if latest == nil {
+		capability.Reason = "no compatibility observations recorded"
+		return capability
+	}
+	capability.Capabilities = []string{fmt.Sprintf("latest=%s/%s/%s", latest.Client, latest.Feature, latest.Source)}
+	capability.Reason = fmt.Sprintf("latest source %s observed at %s", latest.Source, latest.LastObservedAt.UTC().Format(time.RFC3339))
+	if primary(*latest) {
+		capability.Status = Available
+		capability.Available = true
+		return capability
+	}
+	capability.Status = Unavailable
+	capability.Recovery = "exercise the Workbench primary path and rerun wb doctor before removing compatibility fallback"
+	return capability
 }
 
 type toolSpec struct {

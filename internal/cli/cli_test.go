@@ -13,6 +13,7 @@ import (
 
 	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/backend"
+	"github.com/jisung9870/workbench/internal/compatibility"
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/output"
 )
@@ -216,6 +217,34 @@ func TestAgentsListJSONUsesRegistryStateSource(t *testing.T) {
 	}
 	if !envelope.OK || len(envelope.Data.Agents) != 1 || envelope.Data.Agents[0].StateSource != agents.SourceRegistry {
 		t.Fatalf("unexpected agent envelope: %#v", envelope)
+	}
+	observations, err := compatibility.NewStore(filepath.Join(stateRoot, "workbench", "compatibility")).Load()
+	if err != nil || len(observations) != 1 || observations[0].Client != "workbench" || observations[0].Source != "registry" {
+		t.Fatalf("Agent registry use was not observed: %#v err=%v", observations, err)
+	}
+}
+
+func TestCompatibilityObserveAllowsOnlyExternalTuples(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	var stdout, stderr bytes.Buffer
+	valid := []string{"compatibility", "observe", "--client", "nvim", "--feature", "projects", "--source", "binbox"}
+	if code := Run(valid, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("valid observation failed: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	store := compatibility.NewStore(filepath.Join(root, "state", "workbench", "compatibility"))
+	observations, err := store.Load()
+	if err != nil || len(observations) != 1 || observations[0].Source != "binbox" {
+		t.Fatalf("observation was not stored: %#v err=%v", observations, err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	internal := []string{"compatibility", "observe", "--client", "workbench", "--feature", "agents", "--source", "registry"}
+	if code := Run(internal, &stdout, &stderr); code != ExitArgument {
+		t.Fatalf("internal tuple was accepted: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
 

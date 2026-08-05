@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jisung9870/workbench/internal/backend"
+	"github.com/jisung9870/workbench/internal/compatibility"
 	"github.com/jisung9870/workbench/internal/config"
 )
 
@@ -51,6 +53,7 @@ func testPaths(root string) config.Paths {
 		ConfigFile: filepath.Join(root, "config", "config.toml"), ProjectsFile: filepath.Join(root, "config", "projects.toml"),
 		ProfilesDir: filepath.Join(root, "config", "profiles"), BackupsDir: filepath.Join(root, "state", "backups"),
 		AgentsFile: filepath.Join(root, "state", "agents.json"), WorktreesFile: filepath.Join(root, "state", "worktrees.json"),
+		CompatibilityDir: filepath.Join(root, "state", "compatibility"),
 	}
 }
 
@@ -118,5 +121,66 @@ func TestDoctorTreatsWindowsTerminalAsOptionalInsideWSL(t *testing.T) {
 	item := capability(report, "backend:windows-terminal")
 	if report.Platform != "windows-wsl" || item.Scope != Optional || item.Status != Unavailable {
 		t.Fatalf("unexpected WSL capability: platform=%s item=%#v", report.Platform, item)
+	}
+}
+
+func TestDoctorReportsCompatibilityReadinessFromLastUse(t *testing.T) {
+	root := t.TempDir()
+	paths := testPaths(root)
+	environment := backend.Environment{GOOS: "linux", Getenv: func(string) string { return "" }}
+	manager := NewManager(paths, fakeExecutor{paths: map[string]string{"git": "/usr/bin/git"}}, environment, testRegistry(environment))
+
+	report := manager.Run(context.Background(), "")
+	if item := capability(report, "compatibility:nvim-projects"); item.Status != Skipped {
+		t.Fatalf("missing observations should be skipped: %#v", item)
+	}
+
+	store := compatibility.NewStore(paths.CompatibilityDir)
+	start := time.Date(2026, 8, 5, 6, 0, 0, 0, time.UTC)
+	if err := store.Observe("nvim", "projects", "workbench", start); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Observe("nvim", "projects", "sessionizer", start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Observe("binbox", "agents", "scrape", start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	report = manager.Run(context.Background(), "")
+	if item := capability(report, "compatibility:nvim-projects"); item.Status != Unavailable || item.Scope != Optional {
+		t.Fatalf("newest project fallback was not reported: %#v", item)
+	}
+	if item := capability(report, "compatibility:agents"); item.Status != Unavailable {
+		t.Fatalf("newest Agent scrape was not reported: %#v", item)
+	}
+
+	if err := store.Observe("nvim", "projects", "workbench", start.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Observe("workbench", "agents", "registry", start.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	report = manager.Run(context.Background(), "")
+	if item := capability(report, "compatibility:nvim-projects"); item.Status != Available {
+		t.Fatalf("newest project primary was not reported: %#v", item)
+	}
+	if item := capability(report, "compatibility:agents"); item.Status != Available {
+		t.Fatalf("newest Agent registry use was not reported: %#v", item)
+	}
+}
+
+func TestDoctorTreatsInvalidCompatibilityStateAsCoreFailure(t *testing.T) {
+	root := t.TempDir()
+	paths := testPaths(root)
+	if err := os.MkdirAll(paths.CompatibilityDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.CompatibilityDir, "nvim-projects-workbench.json"), []byte(`{"schema_version":99}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment := backend.Environment{GOOS: "linux", Getenv: func(string) string { return "" }}
+	report := NewManager(paths, fakeExecutor{paths: map[string]string{"git": "/usr/bin/git"}}, environment, testRegistry(environment)).Run(context.Background(), "")
+	if report.Healthy(false) || capability(report, "compatibility-state").Scope != Core || capability(report, "compatibility-state").Status != Unavailable {
+		t.Fatalf("invalid compatibility state was not a core failure: %#v", capability(report, "compatibility-state"))
 	}
 }

@@ -8,14 +8,15 @@ import (
 )
 
 type Paths struct {
-	ConfigDir     string
-	StateDir      string
-	ConfigFile    string
-	ProjectsFile  string
-	WorktreesFile string
-	AgentsFile    string
-	ProfilesDir   string
-	BackupsDir    string
+	ConfigDir        string
+	StateDir         string
+	ConfigFile       string
+	ProjectsFile     string
+	WorktreesFile    string
+	AgentsFile       string
+	CompatibilityDir string
+	ProfilesDir      string
+	BackupsDir       string
 }
 
 func ResolvePaths() (Paths, error) {
@@ -64,13 +65,14 @@ func resolvePaths(goos, home, userConfig, userCache string, getenv func(string) 
 	configDir := filepath.Join(configBase, "workbench")
 	stateDir := filepath.Join(stateBase, "workbench")
 	return Paths{
-		ConfigDir:     configDir,
-		StateDir:      stateDir,
-		ConfigFile:    filepath.Join(configDir, "config.toml"),
-		ProjectsFile:  filepath.Join(configDir, "projects.toml"),
-		WorktreesFile: filepath.Join(stateDir, "worktrees.json"),
-		AgentsFile:    filepath.Join(stateDir, "agents.json"),
-		ProfilesDir:   filepath.Join(configDir, "profiles"),
-		BackupsDir:    filepath.Join(stateDir, "backups"),
+		ConfigDir:        configDir,
+		StateDir:         stateDir,
+		ConfigFile:       filepath.Join(configDir, "config.toml"),
+		ProjectsFile:     filepath.Join(configDir, "projects.toml"),
+		WorktreesFile:    filepath.Join(stateDir, "worktrees.json"),
+		AgentsFile:       filepath.Join(stateDir, "agents.json"),
+		CompatibilityDir: filepath.Join(stateDir, "compatibility"),
+		ProfilesDir:      filepath.Join(configDir, "profiles"),
+		BackupsDir:       filepath.Join(stateDir, "backups"),
 	}, nil
 }
