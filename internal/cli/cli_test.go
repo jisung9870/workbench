@@ -53,6 +53,123 @@ func TestProjectsJSONEnvelopeAndInvalidArgument(t *testing.T) {
 	}
 }
 
+func TestEnvironmentCRUDExportAndJSONContract(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	var stdout, stderr bytes.Buffer
+	args := []string{"env", "add", "dev", "--aws-profile", "sandbox", "--aws-region", "ap-northeast-2", "--kube-context", "cluster", "--set", "FEATURE=hello world", "--json"}
+	if code := Run(args, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("add failed: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var envelope output.Envelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || !envelope.OK || !strings.Contains(stdout.String(), `"environment":{"id":"dev"`) {
+		t.Fatalf("unexpected add envelope: %#v err=%v output=%s", envelope, err, stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "export", "dev"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("export failed: %d %s", code, stderr.String())
+	}
+	if stdout.String() != "export AWS_PROFILE='sandbox'\nexport AWS_REGION='ap-northeast-2'\nexport FEATURE='hello world'\n" {
+		t.Fatalf("unsafe or unexpected shell output: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "kube context/namespace mutation is not implemented") {
+		t.Fatalf("missing kube warning: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "list", "--json"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("list failed: %d %s", code, stderr.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || !envelope.OK || !strings.Contains(stdout.String(), `"environments"`) {
+		t.Fatalf("unexpected list envelope: %#v err=%v", envelope, err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "remove", "dev", "--json"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("remove failed: %d %s", code, stderr.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || !envelope.OK {
+		t.Fatalf("unexpected remove envelope: %#v err=%v", envelope, err)
+	}
+}
+
+func TestEnvironmentMigrationCheckReadOnlyAndBlockedApplyJSON(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "wenv.d")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "dev"), []byte("AWS_PROFILE=migration-value-must-not-be-echoed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"env", "migrate", "check", "--source", source, "--json"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("check failed: %d %s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), `"applied":true`) || !strings.Contains(stdout.String(), `"can_apply":true`) {
+		t.Fatalf("unexpected check result: %s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "migration-value-must-not-be-echoed") {
+		t.Fatalf("migration check exposed preset values: %s", stdout.String())
+	}
+	registry := filepath.Join(root, "config", "workbench", "environments.toml")
+	if _, err := os.Stat(registry); !os.IsNotExist(err) {
+		t.Fatalf("check wrote registry: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "unsafe"), []byte("source ~/.profile\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "migrate", "apply", "--source", source, "--json"}, &stdout, &stderr); code != ExitConflict {
+		t.Fatalf("expected blocked apply, got %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var envelope output.Envelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || envelope.OK || envelope.Error == nil || envelope.Error.Code != "ENV_MIGRATION_BLOCKED" {
+		t.Fatalf("unexpected blocked envelope: %#v err=%v output=%s", envelope, err, stdout.String())
+	}
+	if _, err := os.Stat(registry); !os.IsNotExist(err) {
+		t.Fatalf("blocked apply wrote registry: %v", err)
+	}
+}
+
+func TestEnvironmentMigrationCheckDoesNotExposeInvalidExportValues(t *testing.T) {
+	const sentinel = "SENTINEL_SECRET_VALUE"
+	root := t.TempDir()
+	source := filepath.Join(root, "wenv.d")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "unsafe"), []byte("EXPORTS=(BAD-NAME="+sentinel+")\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	for _, jsonMode := range []bool{false, true} {
+		args := []string{"env", "migrate", "check", "--source", source}
+		if jsonMode {
+			args = append(args, "--json")
+		}
+		var stdout, stderr bytes.Buffer
+		if code := Run(args, &stdout, &stderr); code != ExitOK {
+			t.Fatalf("check failed: mode=%v code=%d stdout=%s stderr=%s", jsonMode, code, stdout.String(), stderr.String())
+		}
+		combined := stdout.String() + stderr.String()
+		if strings.Contains(combined, sentinel) {
+			t.Fatalf("migration check exposed preset value: mode=%v output=%s", jsonMode, combined)
+		}
+		if !strings.Contains(combined, "invalid EXPORTS item at index 0") {
+			t.Fatalf("sanitized location error missing: mode=%v output=%s", jsonMode, combined)
+		}
+	}
+}
+
 func TestWorkflowCatalogJSONAndDisallowedID(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))

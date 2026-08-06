@@ -28,6 +28,12 @@ wb projects list [--json]
 wb projects show <id> [--json]
 wb projects add <path> [--id <id>] [--profile <profile>]
 wb projects remove <id>
+wb env list [--json]
+wb env show <id> [--json]
+wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--json]
+wb env remove <id> [--json]
+wb env export <id> [--json]
+wb env migrate check|apply [--source <wenv.d>] [--json]
 wb open <id> [--backend auto|cmux|windows-terminal|tmux|shell]
 wb worktrees list <project-id> [--json]
 wb worktrees create <project-id> <branch> [--base <ref>]
@@ -57,6 +63,7 @@ Unix and WSL use:
 ```text
 ${XDG_CONFIG_HOME:-~/.config}/workbench/config.toml
 ${XDG_CONFIG_HOME:-~/.config}/workbench/projects.toml
+${XDG_CONFIG_HOME:-~/.config}/workbench/environments.toml
 ${XDG_CONFIG_HOME:-~/.config}/workbench/profiles/*.toml
 ${XDG_STATE_HOME:-~/.local/state}/workbench/backups/
 ${XDG_STATE_HOME:-~/.local/state}/workbench/worktrees.json
@@ -110,6 +117,26 @@ profile = "personal"
 An explicitly supplied `--id` is the portable identity when project directory
 names differ across machines. Without it, `wb` derives a readable lowercase ID
 from the directory basename and rejects collisions.
+
+Environment presets are Workbench-owned schema-v1 configuration. `wb env
+export` prints shell-quoted `export` statements for AWS and additional
+variables; it never changes the parent shell itself. Existing binbox `wenv.d`
+presets can be inspected and migrated without executing them:
+
+```bash
+wb env migrate check
+wb env migrate apply
+eval "$(wb env export dev)"
+```
+
+The parser accepts only `AWS_PROFILE`, `AWS_REGION`, `KUBE_CONTEXT`,
+`KUBE_NAMESPACE`, and `EXPORTS=(KEY=VALUE ...)`. It never uses `source` or
+`eval`; shell commands, substitutions, expansions, redirections, and other
+syntax make the preset `unsupported`. Apply is all-or-nothing, and conflicts
+preserve the existing registry. Kube context/namespace mutation, secret
+references, and project/Task environment attachment are intentionally deferred;
+`exports` are ordinary plaintext configuration and must not contain secrets.
+See [docs/environments.md](docs/environments.md).
 
 An optional active profile can select a backend and machine-local Windows
 Terminal launch preferences:

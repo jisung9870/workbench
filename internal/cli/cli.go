@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/jisung9870/workbench/internal/compatibility"
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/doctor"
+	"github.com/jisung9870/workbench/internal/environments"
 	"github.com/jisung9870/workbench/internal/migrate"
 	"github.com/jisung9870/workbench/internal/output"
 	"github.com/jisung9870/workbench/internal/projects"
@@ -65,6 +67,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "projects":
 		commandErr = runProjects(args[1:], paths, stdout)
+	case "env":
+		commandErr = runEnv(args[1:], paths, stdout, stderr)
 	case "config":
 		commandErr = runConfig(args[1:], paths, stdout)
 	case "migrate":
@@ -987,6 +991,289 @@ func runProjects(args []string, paths config.Paths, stdout io.Writer) *commandEr
 	}
 }
 
+func runEnv(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
+	if len(args) == 0 {
+		return invalid("env subcommand is required")
+	}
+	store := environments.NewStore(paths)
+	switch args[0] {
+	case "list":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) != 0 {
+			return invalid("usage: wb env list [--json]")
+		}
+		items, err := store.List()
+		if err != nil {
+			return configError(err)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"environments": items}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		for _, item := range items {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", item.ID, item.AWSProfile, item.AWSRegion, item.KubeContext, item.KubeNamespace)
+		}
+		return nil
+	case "show":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) != 1 {
+			return invalid("usage: wb env show <id> [--json]")
+		}
+		item, found, err := store.Show(positionals[0])
+		if err != nil {
+			return configError(err)
+		}
+		if !found {
+			return envNotFound(positionals[0])
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"environment": item}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "id: %s\naws_profile: %s\naws_region: %s\nkube_context: %s\nkube_namespace: %s\n", item.ID, item.AWSProfile, item.AWSRegion, item.KubeContext, item.KubeNamespace)
+		keys := make([]string, 0, len(item.Exports))
+		for key := range item.Exports {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(stdout, "export: %s=%s\n", key, item.Exports[key])
+		}
+		return nil
+	case "add":
+		item, jsonMode, parseErr := parseEnvAdd(args[1:])
+		if parseErr != nil {
+			return parseErr
+		}
+		backup, err := store.Add(item)
+		if err != nil {
+			return envError(err)
+		}
+		if jsonMode {
+			if err := output.Write(stdout, map[string]any{"environment": item, "backup": backup}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "added %s\n", item.ID)
+		if backup != "" {
+			fmt.Fprintf(stdout, "backup %s\n", backup)
+		}
+		return nil
+	case "remove":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) != 1 {
+			return invalid("usage: wb env remove <id> [--json]")
+		}
+		item, found, backup, err := store.Remove(positionals[0])
+		if err != nil {
+			return envError(err)
+		}
+		if !found {
+			return envNotFound(positionals[0])
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"environment": item, "backup": backup}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "removed %s\n", item.ID)
+		if backup != "" {
+			fmt.Fprintf(stdout, "backup %s\n", backup)
+		}
+		return nil
+	case "export":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) != 1 {
+			return invalid("usage: wb env export <id> [--json]")
+		}
+		item, found, err := store.Show(positionals[0])
+		if err != nil {
+			return configError(err)
+		}
+		if !found {
+			return envNotFound(positionals[0])
+		}
+		pending := []string{}
+		warnings := []string{}
+		if item.KubeContext != "" {
+			pending = append(pending, "kube_context")
+		}
+		if item.KubeNamespace != "" {
+			pending = append(pending, "kube_namespace")
+		}
+		if len(pending) > 0 {
+			warnings = append(warnings, "kube context/namespace mutation is not implemented; wb env export emits environment variables only")
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"environment": item, "exports": environments.ExportValues(item), "pending_mutations": pending}, warnings); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		for _, warning := range warnings {
+			fmt.Fprintf(stderr, "warning: %s\n", warning)
+		}
+		fmt.Fprint(stdout, environments.ShellExports(item))
+		return nil
+	case "migrate":
+		return runEnvMigrate(args[1:], paths, stdout, stderr)
+	default:
+		return invalid("unknown env subcommand %q", args[0])
+	}
+}
+
+func parseEnvAdd(args []string) (environments.Environment, bool, *commandError) {
+	item := environments.Environment{Exports: map[string]string{}}
+	jsonMode := false
+	positionals := []string{}
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		if argument == "--json" {
+			if jsonMode {
+				return item, false, invalid("option %q was provided more than once", argument)
+			}
+			jsonMode = true
+			continue
+		}
+		if !strings.HasPrefix(argument, "--") {
+			positionals = append(positionals, argument)
+			continue
+		}
+		if index+1 >= len(args) || strings.HasPrefix(args[index+1], "--") {
+			return item, false, invalid("option %q requires a value", argument)
+		}
+		index++
+		value := args[index]
+		switch argument {
+		case "--aws-profile":
+			if item.AWSProfile != "" {
+				return item, false, invalid("option %q was provided more than once", argument)
+			}
+			item.AWSProfile = value
+		case "--aws-region":
+			if item.AWSRegion != "" {
+				return item, false, invalid("option %q was provided more than once", argument)
+			}
+			item.AWSRegion = value
+		case "--kube-context":
+			if item.KubeContext != "" {
+				return item, false, invalid("option %q was provided more than once", argument)
+			}
+			item.KubeContext = value
+		case "--kube-namespace":
+			if item.KubeNamespace != "" {
+				return item, false, invalid("option %q was provided more than once", argument)
+			}
+			item.KubeNamespace = value
+		case "--set":
+			key, exportValue, found := strings.Cut(value, "=")
+			if !found || !environments.ValidVariableName(key) || environments.ReservedKey(key) {
+				return item, false, invalid("--set requires a non-reserved KEY=VALUE")
+			}
+			if _, exists := item.Exports[key]; exists {
+				return item, false, invalid("duplicate --set key %q", key)
+			}
+			item.Exports[key] = exportValue
+		default:
+			return item, false, invalid("unknown option %q", argument)
+		}
+	}
+	if len(positionals) != 1 {
+		return item, false, invalid("usage: wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--json]")
+	}
+	item.ID = positionals[0]
+	if err := environments.ValidateRegistry(environments.Registry{SchemaVersion: environments.SchemaVersion, Environments: []environments.Environment{item}}); err != nil {
+		return item, false, invalid("%s", err)
+	}
+	return item, jsonMode, nil
+}
+
+func runEnvMigrate(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
+	if len(args) == 0 || args[0] != "check" && args[0] != "apply" {
+		return invalid("usage: wb env migrate check|apply [--source <dir>] [--json]")
+	}
+	mode := args[0]
+	positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--source": true, "--json": false})
+	if parseErr != nil || len(positionals) != 0 {
+		return invalid("usage: wb env migrate check|apply [--source <dir>] [--json]")
+	}
+	source := options["--source"]
+	if source == "" {
+		source = defaultWenvDir(paths)
+	}
+	store := environments.NewStore(paths)
+	plan, err := environments.PlanWenv(source, store)
+	if err != nil {
+		return configError(err)
+	}
+	jsonMode := false
+	if _, jsonMode = options["--json"]; jsonMode {
+		if mode == "check" {
+			if err := output.Write(stdout, map[string]any{"migration": plan, "applied": false}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+	}
+	if !jsonMode {
+		fmt.Fprintf(stdout, "wenv source: %s\nready: %d\nexisting: %d\nblocked: %d\n", plan.SourceDir, plan.Ready, plan.Existing, plan.Blocked)
+		for _, item := range plan.Items {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\n", item.Status, item.ID, strings.Join(item.Issues, "; "))
+		}
+		if mode == "check" {
+			fmt.Fprintln(stdout, "dry-run only; no files changed")
+			return nil
+		}
+	}
+	if !plan.CanApply {
+		return &commandError{ExitCode: ExitConflict, Code: "ENV_MIGRATION_BLOCKED", Message: "wenv migration is blocked; no environments were changed", Details: map[string]any{"migration": plan}}
+	}
+	backup, applyErr := environments.ApplyWenv(plan, store)
+	if applyErr != nil {
+		return envError(applyErr)
+	}
+	if jsonMode {
+		if err := output.Write(stdout, map[string]any{"migration": plan, "applied": true, "backup": backup}, nil); err != nil {
+			return generalError(err)
+		}
+		return nil
+	}
+	fmt.Fprintf(stdout, "applied %d environment(s)\n", plan.Ready)
+	if backup != "" {
+		fmt.Fprintf(stdout, "backup %s\n", backup)
+	}
+	return nil
+}
+
+func defaultWenvDir(paths config.Paths) string {
+	if override := os.Getenv("BINBOX_WENV_DIR"); override != "" {
+		return override
+	}
+	return filepath.Join(filepath.Dir(paths.ConfigDir), "binbox", "wenv.d")
+}
+
+func envNotFound(id string) *commandError {
+	return &commandError{ExitCode: ExitGeneral, Code: "ENVIRONMENT_NOT_FOUND", Message: fmt.Sprintf("environment %q was not found", id), Details: map[string]any{"environment_id": id}}
+}
+
+func envError(err error) *commandError {
+	var invalidErr *environments.InvalidError
+	if errors.As(err, &invalidErr) {
+		return invalid("%s", err)
+	}
+	var conflictErr *environments.ConflictError
+	if errors.As(err, &conflictErr) {
+		return &commandError{ExitCode: ExitConflict, Code: "ENVIRONMENT_CONFLICT", Message: err.Error()}
+	}
+	return configError(err)
+}
+
 func runConfig(args []string, paths config.Paths, stdout io.Writer) *commandError {
 	if len(args) != 1 || args[0] != "validate" {
 		return invalid("usage: wb config validate")
@@ -997,7 +1284,10 @@ func runConfig(args []string, paths config.Paths, stdout io.Writer) *commandErro
 	if _, err := projects.NewStore(paths).Load(); err != nil {
 		return configError(err)
 	}
-	fmt.Fprintf(stdout, "configuration valid\nconfig: %s\nprojects: %s\n", paths.ConfigFile, paths.ProjectsFile)
+	if _, err := environments.NewStore(paths).Load(); err != nil {
+		return configError(err)
+	}
+	fmt.Fprintf(stdout, "configuration valid\nconfig: %s\nprojects: %s\nenvironments: %s\n", paths.ConfigFile, paths.ProjectsFile, paths.EnvironmentsFile)
 	return nil
 }
 
@@ -1134,6 +1424,12 @@ Usage:
   wb projects show <id> [--json]
   wb projects add <path> [--id <id>] [--profile <profile>]
   wb projects remove <id>
+  wb env list [--json]
+  wb env show <id> [--json]
+  wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--json]
+  wb env remove <id> [--json]
+  wb env export <id> [--json]
+  wb env migrate check|apply [--source <wenv.d>] [--json]
   wb open <project-id> [--backend <backend>] [--window <last|new|id>] [--terminal-mode <tab|split-auto|split-horizontal|split-vertical>]
   wb worktrees list <project-id> [--json]
   wb worktrees create <project-id> <branch> [--base <ref>]

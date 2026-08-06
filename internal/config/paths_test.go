@@ -26,6 +26,9 @@ func TestResolvePathsUsesXDGDirectories(t *testing.T) {
 	if paths.BackupsDir != filepath.Join("/tmp/example-state", "workbench", "backups") {
 		t.Fatalf("unexpected backup path: %s", paths.BackupsDir)
 	}
+	if paths.EnvironmentsFile != filepath.Join("/tmp/example-config", "workbench", "environments.toml") {
+		t.Fatalf("unexpected environment registry path: %s", paths.EnvironmentsFile)
+	}
 	if paths.AgentsFile != filepath.Join("/tmp/example-state", "workbench", "agents.json") {
 		t.Fatalf("unexpected agent registry path: %s", paths.AgentsFile)
 	}
