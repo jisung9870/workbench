@@ -122,6 +122,7 @@ default_backend = "auto"
 editor = "nvim"
 tags = ["terraform"]
 profile = "personal"
+environment_id = "dev"
 ```
 
 An explicitly supplied `--id` is the portable identity when project directory
@@ -144,9 +145,10 @@ The parser accepts only `AWS_PROFILE`, `AWS_REGION`, `KUBE_CONTEXT`,
 `KUBE_NAMESPACE`, and `EXPORTS=(KEY=VALUE ...)`. It never uses `source` or
 `eval`; shell commands, substitutions, expansions, redirections, and other
 syntax make the preset `unsupported`. Apply is all-or-nothing, and conflicts
-preserve the existing registry. Kube context/namespace mutation, secret
-references, and project/Task environment attachment are intentionally deferred;
-`exports` are ordinary plaintext configuration and must not contain secrets.
+preserve the existing registry. Projects can select a default environment with
+`wb projects set-environment <project> <environment|none>`. Kube
+context/namespace mutation remains deferred; `exports` are ordinary plaintext
+configuration and must not contain secrets.
 See [docs/environments.md](docs/environments.md).
 
 ## Local secrets
@@ -387,13 +389,18 @@ there is no arbitrary command runner.
 ```bash
 wb workflows catalog --project setup
 wb workflows run project.test --project setup
+wb workflows run project.test --project setup --environment dev
+wb workflows run project.test --project setup --resolve-secrets
 wb workflows history --project setup
 ```
 
 The Dashboard exposes the same catalog with confirmation and recent bounded
 results. Runs start in a project tmux window, return immediately as managed
 Tasks, and finish independently of the Dashboard request. Apply, destroy, secret plaintext, arbitrary paths/arguments, and force
-operations are not available. See [docs/workflows.md](docs/workflows.md).
+operations are not available. Secret resolution is explicit and redacted at the
+terminal boundary, but project code remains trusted: it can encode, write, or
+send injected values outside Workbench's control. See
+[docs/workflows.md](docs/workflows.md).
 
 Tool health is sourced only from the official `bb doctor --json` schema-v1
 contract. Executable paths from that response are deliberately omitted. A

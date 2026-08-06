@@ -54,10 +54,12 @@ type WorkflowRun struct {
 	OutputTruncated bool             `json:"output_truncated"`
 	PaneID          string           `json:"pane_id,omitempty"`
 	SessionName     string           `json:"session_name,omitempty"`
+	EnvironmentID   string           `json:"environment_id,omitempty"`
+	ResolveSecrets  bool             `json:"resolve_secrets"`
 }
 
 func SafeWorkflowRun(result workflows.Result) WorkflowRun {
-	return WorkflowRun{ID: result.ID, WorkflowID: result.WorkflowID, ProjectID: result.ProjectID, Status: result.Status, ExitCode: result.ExitCode, StartedAt: result.StartedAt, FinishedAt: result.FinishedAt, DurationMillis: result.DurationMillis, OutputTruncated: result.OutputTruncated, PaneID: result.PaneID, SessionName: result.SessionName}
+	return WorkflowRun{ID: result.ID, WorkflowID: result.WorkflowID, ProjectID: result.ProjectID, Status: result.Status, ExitCode: result.ExitCode, StartedAt: result.StartedAt, FinishedAt: result.FinishedAt, DurationMillis: result.DurationMillis, OutputTruncated: result.OutputTruncated, PaneID: result.PaneID, SessionName: result.SessionName, EnvironmentID: result.EnvironmentID, ResolveSecrets: result.ResolveSecrets}
 }
 
 type Snapshot struct {

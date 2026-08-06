@@ -82,8 +82,20 @@ second plan is calculated immediately before mutation to detect source or
 registry changes. Identical existing records are idempotently skipped; all
 ready records are committed in one registry replacement.
 
-## Deferred Phase 5 scope
+## Project and workflow integration
 
-Project or Task attachment, scoped subprocess injection, kube mutation, expiry
-policy, and Dashboard controls remain later Phase 5 work. Ordinary `exports`
-remain plaintext configuration and must not contain secret values.
+A project can store an optional default `environment_id`. Typed workflow runs
+use that default unless `--environment <id>` overrides it or
+`--no-environment` explicitly disables it. Immediately before starting the
+subprocess, the detached worker reloads the selected environment, preserves
+the inherited process environment, and overlays `AWS_PROFILE`, `AWS_REGION`,
+and ordinary `exports`. Secret references are resolved only when the run was
+launched with `--resolve-secrets`; missing or invalid references and
+NUL-containing values fail before project code starts. Workflow state and API
+responses retain only the environment ID and the `resolve_secrets` request
+intent, never resolved values or reference details.
+
+Kubernetes context/namespace mutation, environment or credential expiry
+policy, and dedicated Dashboard environment/secret controls remain deferred.
+Ordinary `exports` remain plaintext configuration and must not contain secret
+values.

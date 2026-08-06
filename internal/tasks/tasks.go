@@ -46,6 +46,7 @@ type Task struct {
 	Confidence      string          `json:"confidence"`
 	Lifecycle       string          `json:"lifecycle"`
 	ProjectID       string          `json:"project_id,omitempty"`
+	EnvironmentID   string          `json:"environment_id,omitempty"`
 	RuntimeLocation RuntimeLocation `json:"runtime_location,omitempty"`
 	CWD             string          `json:"cwd,omitempty"`
 	LastObservedAt  *time.Time      `json:"last_observed_at,omitempty"`
@@ -117,7 +118,7 @@ func ProjectWithWorkflows(managed []agents.Task, workflowRuns []workflows.Result
 				lifecycle, canJump = "orphaned", false
 			}
 		}
-		result = append(result, Task{ID: run.ID, Kind: run.WorkflowID, Provenance: ProvenanceManaged, StateSource: "workflow_registry", Ownership: OwnershipManaged, Confidence: ConfidenceAuthoritative, Lifecycle: lifecycle, ProjectID: run.ProjectID, ExitCode: run.ExitCode, ExitResult: workflowExitResult(run), RuntimeLocation: RuntimeLocation{SessionName: run.SessionName, PaneID: run.PaneID}, Evidence: []Evidence{{Field: "workflow_id", Value: run.WorkflowID}, {Field: "stop_policy", Value: "return to terminal; Dashboard stop unavailable"}}, CanJump: canJump, CanStop: false})
+		result = append(result, Task{ID: run.ID, Kind: run.WorkflowID, Provenance: ProvenanceManaged, StateSource: "workflow_registry", Ownership: OwnershipManaged, Confidence: ConfidenceAuthoritative, Lifecycle: lifecycle, ProjectID: run.ProjectID, EnvironmentID: run.EnvironmentID, ExitCode: run.ExitCode, ExitResult: workflowExitResult(run), RuntimeLocation: RuntimeLocation{SessionName: run.SessionName, PaneID: run.PaneID}, Evidence: []Evidence{{Field: "workflow_id", Value: run.WorkflowID}, {Field: "stop_policy", Value: "return to terminal; Dashboard stop unavailable"}}, CanJump: canJump, CanStop: false})
 		if active && run.PaneID != "" {
 			ownedPanes[run.PaneID] = struct{}{}
 		}

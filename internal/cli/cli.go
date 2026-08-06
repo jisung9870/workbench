@@ -140,11 +140,16 @@ func runWorkflows(args []string, paths config.Paths, stdout io.Writer) *commandE
 		}
 		return nil
 	case "run":
-		positionals, options, err := parseOptions(args[1:], map[string]bool{"--project": true, "--json": false})
+		positionals, options, err := parseOptions(args[1:], map[string]bool{"--project": true, "--environment": true, "--no-environment": false, "--resolve-secrets": false, "--json": false})
 		if err != nil || len(positionals) != 1 || options["--project"] == "" {
-			return invalid("usage: wb workflows run <workflow-id> --project <id> [--json]")
+			return invalid("usage: wb workflows run <workflow-id> --project <id> [--environment <id>|--no-environment] [--resolve-secrets] [--json]")
 		}
-		result, backup, runErr := manager.Launch(context.Background(), positionals[0], options["--project"])
+		_, noEnvironment := options["--no-environment"]
+		_, resolveSecrets := options["--resolve-secrets"]
+		if noEnvironment && options["--environment"] != "" {
+			return invalid("--environment and --no-environment cannot be combined")
+		}
+		result, backup, runErr := manager.LaunchWithOptions(context.Background(), positionals[0], options["--project"], workflows.RunOptions{EnvironmentID: options["--environment"], NoEnvironment: noEnvironment, ResolveSecrets: resolveSecrets})
 		if runErr != nil {
 			return workflowError(runErr)
 		}
@@ -210,7 +215,7 @@ func runWorkflows(args []string, paths config.Paths, stdout io.Writer) *commandE
 			}
 			return nil
 		}
-		fmt.Fprintf(stdout, "id: %s\nworkflow_id: %s\nproject_id: %s\nstatus: %s\nstarted_at: %s\nfinished_at: %s\n", item.ID, item.WorkflowID, item.ProjectID, item.Status, item.StartedAt.Format(time.RFC3339), item.FinishedAt.Format(time.RFC3339))
+		fmt.Fprintf(stdout, "id: %s\nworkflow_id: %s\nproject_id: %s\nenvironment_id: %s\nresolve_secrets: %t\nstatus: %s\nstarted_at: %s\nfinished_at: %s\n", item.ID, item.WorkflowID, item.ProjectID, item.EnvironmentID, item.ResolveSecrets, item.Status, item.StartedAt.Format(time.RFC3339), item.FinishedAt.Format(time.RFC3339))
 		if item.Output != "" {
 			fmt.Fprint(stdout, item.Output)
 		}
@@ -960,14 +965,24 @@ func runProjects(args []string, paths config.Paths, stdout io.Writer) *commandEr
 			}
 			return nil
 		}
-		fmt.Fprintf(stdout, "id: %s\nname: %s\npath: %s\nrepo_root: %s\nprofile: %s\ndefault_backend: %s\neditor: %s\n", project.ID, project.Name, project.Path, project.RepoRoot, project.Profile, project.DefaultBackend, project.Editor)
+		fmt.Fprintf(stdout, "id: %s\nname: %s\npath: %s\nrepo_root: %s\nprofile: %s\nenvironment_id: %s\ndefault_backend: %s\neditor: %s\n", project.ID, project.Name, project.Path, project.RepoRoot, project.Profile, project.EnvironmentID, project.DefaultBackend, project.Editor)
 		return nil
 	case "add":
-		positionals, options, err := parseOptions(args[1:], map[string]bool{"--id": true, "--profile": true})
+		positionals, options, err := parseOptions(args[1:], map[string]bool{"--id": true, "--profile": true, "--environment": true})
 		if err != nil || len(positionals) != 1 {
-			return invalid("usage: wb projects add <path> [--id <id>] [--profile <profile>]")
+			return invalid("usage: wb projects add <path> [--id <id>] [--profile <profile>] [--environment <id>]")
 		}
-		project, backup, addErr := store.Add(positionals[0], options["--id"], options["--profile"])
+		if environmentID := options["--environment"]; environmentID != "" {
+			if !environments.ValidID(environmentID) {
+				return invalid("invalid environment ID")
+			}
+			if _, found, loadErr := environments.NewStore(paths).Show(environmentID); loadErr != nil {
+				return configError(loadErr)
+			} else if !found {
+				return envNotFound(environmentID)
+			}
+		}
+		project, backup, addErr := store.AddWithEnvironment(positionals[0], options["--id"], options["--profile"], options["--environment"])
 		if addErr != nil {
 			if isConflict(addErr) {
 				return &commandError{ExitCode: ExitConflict, Code: "PROJECT_CONFLICT", Message: addErr.Error()}
@@ -975,6 +990,39 @@ func runProjects(args []string, paths config.Paths, stdout io.Writer) *commandEr
 			return configError(addErr)
 		}
 		fmt.Fprintf(stdout, "added %s\t%s\n", project.ID, project.Path)
+		if backup != "" {
+			fmt.Fprintf(stdout, "backup %s\n", backup)
+		}
+		return nil
+	case "set-environment":
+		if len(args) != 3 || strings.HasPrefix(args[1], "-") || strings.HasPrefix(args[2], "-") {
+			return invalid("usage: wb projects set-environment <project-id> <environment-id|none>")
+		}
+		environmentID := args[2]
+		if environmentID == "none" {
+			environmentID = ""
+		} else {
+			if !environments.ValidID(environmentID) {
+				return invalid("invalid environment ID")
+			}
+			if _, found, loadErr := environments.NewStore(paths).Show(environmentID); loadErr != nil {
+				return configError(loadErr)
+			} else if !found {
+				return envNotFound(environmentID)
+			}
+		}
+		project, found, backup, setErr := store.SetEnvironment(args[1], environmentID)
+		if setErr != nil {
+			return configError(setErr)
+		}
+		if !found {
+			return &commandError{ExitCode: ExitGeneral, Code: "PROJECT_NOT_FOUND", Message: fmt.Sprintf("project %q was not found", args[1])}
+		}
+		if environmentID == "" {
+			fmt.Fprintf(stdout, "cleared environment for %s\n", project.ID)
+		} else {
+			fmt.Fprintf(stdout, "set environment for %s to %s\n", project.ID, environmentID)
+		}
 		if backup != "" {
 			fmt.Fprintf(stdout, "backup %s\n", backup)
 		}
@@ -1813,7 +1861,8 @@ func usage() string {
 Usage:
   wb projects list [--json]
   wb projects show <id> [--json]
-  wb projects add <path> [--id <id>] [--profile <profile>]
+  wb projects add <path> [--id <id>] [--profile <profile>] [--environment <id>]
+  wb projects set-environment <project-id> <environment-id|none>
   wb projects remove <id>
   wb env list [--json]
   wb env show <id> [--json]
@@ -1845,7 +1894,7 @@ Usage:
   wb sessions jump <pane-id>
   wb overview [--json]
   wb workflows catalog [--project <id>] [--json]
-  wb workflows run <workflow-id> --project <id> [--json]
+  wb workflows run <workflow-id> --project <id> [--environment <id>|--no-environment] [--resolve-secrets] [--json]
   wb workflows history [--project <id>] [--json]
   wb workflows show <run-id> [--json]
   wb compatibility observe --client <client> --feature <feature> --source <source>

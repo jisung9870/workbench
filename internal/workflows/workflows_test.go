@@ -1,9 +1,12 @@
 package workflows
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,12 +19,42 @@ import (
 
 	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/config"
+	"github.com/jisung9870/workbench/internal/environments"
 	"github.com/jisung9870/workbench/internal/projects"
+	workbenchsecrets "github.com/jisung9870/workbench/internal/secrets"
 )
 
 type fakeProjects struct {
 	project projects.Project
 	found   bool
+}
+
+type fakeEnvironments struct {
+	items map[string]environments.Environment
+}
+
+func (f fakeEnvironments) Show(id string) (environments.Environment, bool, error) {
+	item, found := f.items[id]
+	return item, found, nil
+}
+
+type fakeSecrets struct{ values map[string][]byte }
+
+func (f fakeSecrets) Get(service, field string) ([]byte, string, error) {
+	value, found := f.values[service+"/"+field]
+	if !found {
+		return nil, "", &workbenchsecrets.NotFoundError{Message: "not found"}
+	}
+	return append([]byte(nil), value...), "", nil
+}
+
+type failingWriter struct{ short bool }
+
+func (w failingWriter) Write(p []byte) (int, error) {
+	if w.short && len(p) > 0 {
+		return len(p) - 1, nil
+	}
+	return 0, errors.New("terminal unavailable")
 }
 
 func (f fakeProjects) Show(string) (projects.Project, bool, error) { return f.project, f.found, nil }
@@ -106,6 +139,12 @@ func (e *fakeExecutor) LookPath(name string) (string, error) {
 }
 func (e *fakeExecutor) Run(ctx context.Context, command Command, limit int) (Execution, error) {
 	e.command, e.limit = command, limit
+	if command.Environment != nil {
+		e.command.Environment = make(map[string]string, len(command.Environment))
+		for key, value := range command.Environment {
+			e.command.Environment[key] = value
+		}
+	}
 	if e.wait {
 		<-ctx.Done()
 		return Execution{ExitCode: -1}, ctx.Err()
@@ -147,6 +186,144 @@ func TestProjectTestUsesCanonicalRegistryPathAndExactArgv(t *testing.T) {
 	}
 	if executor.limit != OutputLimit || result.Status != Succeeded || len(history.items) != 1 {
 		t.Fatalf("unexpected run: %#v limit=%d history=%d", result, executor.limit, len(history.items))
+	}
+}
+
+func TestRunEnvironmentDefaultOverrideAndDisable(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example\n")
+	executor := &fakeExecutor{paths: map[string]string{"go": "/tools/go"}, execution: Execution{ExitCode: 0}}
+	manager := NewManager(fakeProjects{project: projects.Project{ID: "alpha", Path: root, EnvironmentID: "default"}, found: true}, &memoryHistory{}, executor, time.Now).
+		WithEnvironmentStores(fakeEnvironments{items: map[string]environments.Environment{
+			"default": {ID: "default", AWSProfile: "dev", Exports: map[string]string{"SOURCE": "default"}},
+			"other":   {ID: "other", AWSRegion: "us-west-2", Exports: map[string]string{"SOURCE": "override"}},
+		}}, fakeSecrets{})
+	result, _, err := manager.Run(context.Background(), ProjectTest, "alpha")
+	if err != nil || result.EnvironmentID != "default" || executor.command.Environment["AWS_PROFILE"] != "dev" {
+		t.Fatalf("default environment failed: result=%#v command=%#v err=%v", result, executor.command, err)
+	}
+	result, _, err = manager.RunWithOptions(context.Background(), ProjectTest, "alpha", RunOptions{EnvironmentID: "other"})
+	if err != nil || result.EnvironmentID != "other" || executor.command.Environment["SOURCE"] != "override" {
+		t.Fatalf("override environment failed: result=%#v command=%#v err=%v", result, executor.command, err)
+	}
+	result, _, err = manager.RunWithOptions(context.Background(), ProjectTest, "alpha", RunOptions{NoEnvironment: true})
+	if err != nil || result.EnvironmentID != "" || len(executor.command.Environment) != 0 {
+		t.Fatalf("disabled environment failed: result=%#v command=%#v err=%v", result, executor.command, err)
+	}
+}
+
+func TestSecretInjectionMetadataAndMissingSecretPreventsExecution(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example\n")
+	environment := environments.Environment{ID: "dev", Secrets: map[string]string{"TOKEN": "sec://svc/token"}}
+	executor := &fakeExecutor{paths: map[string]string{"go": "/tools/go"}, execution: Execution{ExitCode: 0}}
+	manager := NewManager(fakeProjects{project: projects.Project{ID: "alpha", Path: root, EnvironmentID: "dev"}, found: true}, &memoryHistory{}, executor, time.Now).
+		WithEnvironmentStores(fakeEnvironments{items: map[string]environments.Environment{"dev": environment}}, fakeSecrets{values: map[string][]byte{"svc/token": []byte("raw-value")}})
+	result, _, err := manager.RunWithOptions(context.Background(), ProjectTest, "alpha", RunOptions{ResolveSecrets: true})
+	if err != nil || !result.ResolveSecrets || result.EnvironmentID != "dev" || executor.command.Environment["TOKEN"] != "raw-value" {
+		t.Fatalf("secret injection failed: result=%#v command=%#v err=%v", result, executor.command, err)
+	}
+	executor.command = Command{}
+	manager.secrets = fakeSecrets{}
+	if _, _, err := manager.RunWithOptions(context.Background(), ProjectTest, "alpha", RunOptions{ResolveSecrets: true}); err == nil || executor.command.Executable != "" {
+		t.Fatalf("missing secret started process: command=%#v err=%v", executor.command, err)
+	}
+}
+
+func TestMergeEnvironmentWindowsCaseInsensitiveAndRedactsCapturedSecrets(t *testing.T) {
+	merged, err := mergeEnvironment([]string{"Path=old", "KEEP=yes", "PATH=duplicate"}, map[string]string{"path": "new"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(merged, "|"); strings.Count(strings.ToUpper(got), "PATH=") != 1 || !strings.Contains(got, "path=new") || !strings.Contains(got, "KEEP=yes") {
+		t.Fatalf("unexpected merged environment: %q", got)
+	}
+	if got := redactSecrets("before raw-value after raw-value", [][]byte{[]byte("raw-value")}); got != "before [REDACTED] after [REDACTED]" {
+		t.Fatalf("secret not redacted: %q", got)
+	}
+}
+
+func TestOSExecutorInjectsEnvironmentAndNeverStreamsRawSecret(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh unavailable")
+	}
+	const secret = "chunk-boundary-secret"
+	t.Setenv("INHERITED_FOR_WB_TEST", "kept")
+	var live bytes.Buffer
+	execution, runErr := (&OSExecutor{Live: &live}).Run(context.Background(), Command{
+		Executable:   sh,
+		Args:         []string{"-c", `printf '%s|%s|%s' "$INJECTED" "$INHERITED_FOR_WB_TEST" "$TOKEN"`},
+		Environment:  map[string]string{"INJECTED": "yes", "TOKEN": secret},
+		SecretValues: [][]byte{[]byte(secret)},
+	}, OutputLimit)
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	if strings.Contains(live.String(), secret) || strings.Contains(execution.Output, secret) {
+		t.Fatalf("secret reached output: live=%q captured=%q", live.String(), execution.Output)
+	}
+	if !strings.Contains(live.String(), "yes|kept|[REDACTED]") {
+		t.Fatalf("injected/redacted output missing: %q", live.String())
+	}
+}
+
+func TestNULSecretFailsBeforeExecution(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example\n")
+	executor := &fakeExecutor{paths: map[string]string{"go": "/tools/go"}, execution: Execution{ExitCode: 0}}
+	manager := NewManager(fakeProjects{project: projects.Project{ID: "alpha", Path: root, EnvironmentID: "dev"}, found: true}, &memoryHistory{}, executor, time.Now).
+		WithEnvironmentStores(fakeEnvironments{items: map[string]environments.Environment{"dev": {ID: "dev", Secrets: map[string]string{"TOKEN": "sec://svc/token"}}}}, fakeSecrets{values: map[string][]byte{"svc/token": []byte("bad\x00value")}})
+	if _, _, err := manager.RunWithOptions(context.Background(), ProjectTest, "alpha", RunOptions{ResolveSecrets: true}); err == nil || executor.command.Executable != "" {
+		t.Fatalf("NUL secret started process: command=%#v err=%v", executor.command, err)
+	}
+}
+
+func TestSecretAcrossOutputLimitIsRedactedBeforeTerminalWrite(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh unavailable")
+	}
+	secret := "ZXY-BOUNDARY-SECRET"
+	var live bytes.Buffer
+	script := fmt.Sprintf("head -c %d /dev/zero | tr '\\0' A; printf %%s \"$TOKEN\"", OutputLimit-4)
+	execution, runErr := (&OSExecutor{Live: &live}).Run(context.Background(), Command{Executable: sh, Args: []string{"-c", script}, Environment: map[string]string{"TOKEN": secret}, SecretValues: [][]byte{[]byte(secret)}}, OutputLimit)
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	for length := 1; length <= len(secret); length++ {
+		if strings.Contains(live.String(), secret[:length]) || strings.Contains(execution.Output, secret[:length]) {
+			t.Fatalf("raw secret prefix leaked at capture boundary: length=%d", length)
+		}
+	}
+	if len(live.String()) > OutputLimit || !execution.OutputTruncated {
+		t.Fatalf("bounded output contract failed: live=%d output=%d truncated=%t", live.Len(), len(execution.Output), execution.OutputTruncated)
+	}
+}
+
+func TestRedactedTerminalWriteFailureIsObservableWithoutSecretLeak(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh unavailable")
+	}
+	const secret = "DO-NOT-LEAK-WRITER"
+	for _, writer := range []io.Writer{failingWriter{}, failingWriter{short: true}} {
+		execution, runErr := (&OSExecutor{Live: writer}).Run(context.Background(), Command{Executable: sh, Args: []string{"-c", `printf %s "$TOKEN"`}, Environment: map[string]string{"TOKEN": secret}, SecretValues: [][]byte{[]byte(secret)}}, OutputLimit)
+		if runErr == nil || strings.Contains(runErr.Error(), secret) || strings.Contains(execution.Output, secret) {
+			t.Fatalf("writer failure was hidden or leaked secret: output=%q err=%v", execution.Output, runErr)
+		}
+		if !strings.Contains(runErr.Error(), "write redacted workflow output") {
+			t.Fatalf("writer failure lacks sanitized context: %v", runErr)
+		}
 	}
 }
 
@@ -321,10 +498,21 @@ func TestResultJSONDoesNotPersistCommandOrEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(encoded)
-	for _, forbidden := range []string{"command", "executable", "argv", "environment", "secret"} {
+	for _, forbidden := range []string{"command", "executable", "argv", "environment_values", "secret_values", "sec://"} {
 		if strings.Contains(strings.ToLower(text), forbidden) {
 			t.Fatalf("result persisted forbidden field %s: %s", strconv.Quote(forbidden), text)
 		}
+	}
+}
+
+func TestCommandJSONNeverExposesInjectedValues(t *testing.T) {
+	const sentinel = "WORKFLOW_SECRET_SENTINEL"
+	encoded, err := json.Marshal(Command{Executable: "/go", Args: []string{"test"}, Environment: map[string]string{"TOKEN": sentinel}, SecretValues: [][]byte{[]byte(sentinel)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), sentinel) || strings.Contains(string(encoded), "TOKEN") {
+		t.Fatalf("command JSON exposed injected environment: %s", encoded)
 	}
 }
 
@@ -349,6 +537,59 @@ func TestLaunchPersistsBeforeDetachedTmuxAndReturnsRunning(t *testing.T) {
 	stored, found, err := store.Show(result.ID)
 	if err != nil || !found || stored.Status != Starting {
 		t.Fatalf("pending/running record missing: %#v %v", stored, err)
+	}
+}
+
+func TestDetachedWorkerReloadsLatestEnvironmentAndSecret(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example\n")
+	store := NewStore(config.Paths{StateDir: root, WorkflowsFile: filepath.Join(root, "workflows.json"), BackupsDir: filepath.Join(root, "backups")})
+	environmentStore := fakeEnvironments{items: map[string]environments.Environment{"dev": {ID: "dev", Exports: map[string]string{"GENERATION": "before"}, Secrets: map[string]string{"TOKEN": "sec://svc/token"}}}}
+	secretStore := fakeSecrets{values: map[string][]byte{"svc/token": []byte("before-secret")}}
+	executor := &fakeExecutor{paths: map[string]string{"go": "/go"}, execution: Execution{ExitCode: 0}}
+	launcher := &fakeLauncher{location: LaunchLocation{PaneID: "%8", SessionName: "alpha"}}
+	manager := NewManager(fakeProjects{project: projects.Project{ID: "alpha", Path: root, EnvironmentID: "dev"}, found: true}, store, executor, time.Now).
+		WithEnvironmentStores(environmentStore, secretStore)
+	manager.launcher = launcher
+	manager.workerExecutable = func() (string, error) { return "/opt/wb", nil }
+	launched, _, err := manager.LaunchWithOptions(context.Background(), ProjectTest, "alpha", RunOptions{ResolveSecrets: true})
+	if err != nil || launched.EnvironmentID != "dev" || !launched.ResolveSecrets || launched.Status != Starting {
+		t.Fatalf("launch metadata mismatch: %#v err=%v", launched, err)
+	}
+	stored, found, err := store.Show(launched.ID)
+	if err != nil || !found || stored.EnvironmentID != "dev" || !stored.ResolveSecrets {
+		t.Fatalf("intent was not persisted: %#v found=%t err=%v", stored, found, err)
+	}
+	environmentStore.items["dev"] = environments.Environment{ID: "dev", Exports: map[string]string{"GENERATION": "after"}, Secrets: map[string]string{"TOKEN": "sec://svc/token"}}
+	secretStore.values["svc/token"] = []byte("after-secret")
+	completed, _, err := manager.Worker(context.Background(), launched.ID)
+	if err != nil || completed.Status != Succeeded || executor.command.Environment["GENERATION"] != "after" || executor.command.Environment["TOKEN"] != "after-secret" {
+		t.Fatalf("worker did not reload latest values: result=%#v command=%#v err=%v", completed, executor.command, err)
+	}
+}
+
+func TestDetachedWorkerMissingRotatedSecretFailsBeforeProcessStart(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example\n")
+	store := NewStore(config.Paths{StateDir: root, WorkflowsFile: filepath.Join(root, "workflows.json"), BackupsDir: filepath.Join(root, "backups")})
+	environmentStore := fakeEnvironments{items: map[string]environments.Environment{"dev": {ID: "dev", Secrets: map[string]string{"TOKEN": "sec://svc/token"}}}}
+	secretStore := fakeSecrets{values: map[string][]byte{"svc/token": []byte("available-at-launch")}}
+	executor := &fakeExecutor{paths: map[string]string{"go": "/go"}, execution: Execution{ExitCode: 0}}
+	manager := NewManager(fakeProjects{project: projects.Project{ID: "alpha", Path: root, EnvironmentID: "dev"}, found: true}, store, executor, time.Now).
+		WithEnvironmentStores(environmentStore, secretStore)
+	manager.launcher = &fakeLauncher{location: LaunchLocation{PaneID: "%9", SessionName: "alpha"}}
+	manager.workerExecutable = func() (string, error) { return "/opt/wb", nil }
+	launched, _, err := manager.LaunchWithOptions(context.Background(), ProjectTest, "alpha", RunOptions{ResolveSecrets: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(secretStore.values, "svc/token")
+	completed, _, workerErr := manager.Worker(context.Background(), launched.ID)
+	if workerErr != nil || completed.Status != Failed || executor.command.Executable != "" {
+		t.Fatalf("missing rotated secret was not terminal/pre-start: result=%#v command=%#v err=%v", completed, executor.command, workerErr)
+	}
+	if !completed.ResolveSecrets {
+		t.Fatal("resolve intent was lost on failed worker")
 	}
 }
 

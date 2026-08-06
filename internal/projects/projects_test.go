@@ -91,3 +91,20 @@ func TestWindowsWSLOverlayRoundTrips(t *testing.T) {
 		t.Fatalf("overlay did not round-trip: %#v found=%t err=%v", loaded, found, err)
 	}
 }
+
+func TestEnvironmentIDIsOptionalAndCanBeChanged(t *testing.T) {
+	store, _ := testStore(t)
+	projectDir := t.TempDir()
+	project, _, err := store.Add(projectDir, "alpha", "personal")
+	if err != nil || project.EnvironmentID != "" {
+		t.Fatalf("legacy project failed: %#v err=%v", project, err)
+	}
+	updated, found, backup, err := store.SetEnvironment("alpha", "dev")
+	if err != nil || !found || updated.EnvironmentID != "dev" || backup == "" {
+		t.Fatalf("set environment failed: %#v found=%t backup=%q err=%v", updated, found, backup, err)
+	}
+	loaded, found, err := store.Show("alpha")
+	if err != nil || !found || loaded.EnvironmentID != "dev" {
+		t.Fatalf("environment did not round-trip: %#v found=%t err=%v", loaded, found, err)
+	}
+}

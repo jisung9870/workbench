@@ -27,6 +27,7 @@ type Project struct {
 	Editor         string      `toml:"editor" json:"editor"`
 	Tags           []string    `toml:"tags" json:"tags"`
 	Profile        string      `toml:"profile" json:"profile"`
+	EnvironmentID  string      `toml:"environment_id,omitempty" json:"environment_id,omitempty"`
 	WindowsWSL     *WindowsWSL `toml:"windows_wsl,omitempty" json:"windows_wsl,omitempty"`
 }
 
@@ -96,6 +97,10 @@ func (s *Store) Show(id string) (Project, bool, error) {
 }
 
 func (s *Store) Add(path, id, profile string) (Project, string, error) {
+	return s.AddWithEnvironment(path, id, profile, "")
+}
+
+func (s *Store) AddWithEnvironment(path, id, profile, environmentID string) (Project, string, error) {
 	canonical, err := CanonicalPath(path)
 	if err != nil {
 		return Project{}, "", err
@@ -115,6 +120,7 @@ func (s *Store) Add(path, id, profile string) (Project, string, error) {
 		Editor:         "nvim",
 		Tags:           []string{},
 		Profile:        profile,
+		EnvironmentID:  environmentID,
 	}
 	backup, err := s.AddMany([]Project{project})
 	return project, backup, err
@@ -144,6 +150,22 @@ func (s *Store) Remove(id string) (Project, bool, string, error) {
 		registry.Projects = append(registry.Projects[:index], registry.Projects[index+1:]...)
 		backup, err := s.save(registry)
 		return project, true, backup, err
+	}
+	return Project{}, false, "", nil
+}
+
+func (s *Store) SetEnvironment(id, environmentID string) (Project, bool, string, error) {
+	registry, err := s.Load()
+	if err != nil {
+		return Project{}, false, "", err
+	}
+	for index := range registry.Projects {
+		if registry.Projects[index].ID != id {
+			continue
+		}
+		registry.Projects[index].EnvironmentID = environmentID
+		backup, saveErr := s.save(registry)
+		return registry.Projects[index], true, backup, saveErr
 	}
 	return Project{}, false, "", nil
 }
@@ -254,6 +276,9 @@ func validateRegistry(registry Registry) error {
 		}
 		if !config.ValidProfileName(project.Profile) {
 			return fmt.Errorf("project %q has invalid profile %q", project.ID, project.Profile)
+		}
+		if project.EnvironmentID != "" && !validID(project.EnvironmentID) {
+			return fmt.Errorf("project %q has invalid environment_id %q", project.ID, project.EnvironmentID)
 		}
 		if project.DefaultBackend == "" || !config.ValidBackend(project.DefaultBackend) {
 			return fmt.Errorf("project %q has invalid default_backend %q", project.ID, project.DefaultBackend)
