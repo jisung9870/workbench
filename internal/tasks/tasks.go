@@ -78,6 +78,18 @@ func Project(managed []agents.Task, snapshot tmuxadapter.Snapshot, projectItems 
 func ProjectWithWorkflows(managed []agents.Task, workflowRuns []workflows.Result, snapshot tmuxadapter.Snapshot, projectItems []projects.Project, observedAt time.Time) []Task {
 	result := make([]Task, 0, len(managed))
 	ownedPanes := make(map[string]struct{}, len(managed))
+	livePanes := map[string]struct{}{}
+	if snapshot.Available {
+		for _, session := range snapshot.Sessions {
+			for _, window := range session.Windows {
+				for _, pane := range window.Panes {
+					if !pane.Dead {
+						livePanes[pane.ID] = struct{}{}
+					}
+				}
+			}
+		}
+	}
 	for index := range managed {
 		task := managed[index]
 		paneID := task.BackendDetails["pane"]
@@ -97,8 +109,15 @@ func ProjectWithWorkflows(managed []agents.Task, workflowRuns []workflows.Result
 		})
 	}
 	for _, run := range workflowRuns {
-		active := run.Status == workflows.Pending || run.Status == workflows.Running
-		result = append(result, Task{ID: run.ID, Kind: run.WorkflowID, Provenance: ProvenanceManaged, StateSource: "workflow_registry", Ownership: OwnershipManaged, Confidence: ConfidenceAuthoritative, Lifecycle: string(run.Status), ProjectID: run.ProjectID, ExitCode: run.ExitCode, ExitResult: workflowExitResult(run), RuntimeLocation: RuntimeLocation{SessionName: run.SessionName, PaneID: run.PaneID}, Evidence: []Evidence{{Field: "workflow_id", Value: run.WorkflowID}, {Field: "stop_policy", Value: "return to terminal; Dashboard stop unavailable"}}, CanJump: active && run.PaneID != "", CanStop: false})
+		active := run.Status == workflows.Pending || run.Status == workflows.Starting || run.Status == workflows.Running
+		lifecycle := string(run.Status)
+		canJump := active && run.PaneID != ""
+		if snapshot.Available && canJump {
+			if _, live := livePanes[run.PaneID]; !live {
+				lifecycle, canJump = "orphaned", false
+			}
+		}
+		result = append(result, Task{ID: run.ID, Kind: run.WorkflowID, Provenance: ProvenanceManaged, StateSource: "workflow_registry", Ownership: OwnershipManaged, Confidence: ConfidenceAuthoritative, Lifecycle: lifecycle, ProjectID: run.ProjectID, ExitCode: run.ExitCode, ExitResult: workflowExitResult(run), RuntimeLocation: RuntimeLocation{SessionName: run.SessionName, PaneID: run.PaneID}, Evidence: []Evidence{{Field: "workflow_id", Value: run.WorkflowID}, {Field: "stop_policy", Value: "return to terminal; Dashboard stop unavailable"}}, CanJump: canJump, CanStop: false})
 		if active && run.PaneID != "" {
 			ownedPanes[run.PaneID] = struct{}{}
 		}

@@ -26,10 +26,28 @@ func TestClassifyUsesExplicitForegroundCommand(t *testing.T) {
 
 func TestWorkflowRunProjectsAsManagedNonStoppableTask(t *testing.T) {
 	now := time.Now().UTC()
-	items := ProjectWithWorkflows(nil, []workflows.Result{{ID: "run-1", WorkflowID: workflows.SecurityScan, ProjectID: "alpha", Status: workflows.Running, PaneID: "%8", SessionName: "alpha", StartedAt: now, FinishedAt: now}}, tmuxadapter.Snapshot{Available: true}, nil, now)
+	items := ProjectWithWorkflows(nil, []workflows.Result{{ID: "run-1", WorkflowID: workflows.SecurityScan, ProjectID: "alpha", Status: workflows.Running, PaneID: "%8", SessionName: "alpha", StartedAt: now, FinishedAt: now}}, tmuxadapter.Snapshot{Available: true, Sessions: []tmuxadapter.Session{{Windows: []tmuxadapter.Window{{Panes: []tmuxadapter.Pane{{ID: "%8"}}}}}}}, nil, now)
 	task, found := Find(items, "run-1")
 	if !found || task.Provenance != ProvenanceManaged || task.Ownership != OwnershipManaged || !task.CanJump || task.CanStop || task.RuntimeLocation.PaneID != "%8" {
 		t.Fatalf("workflow task contract mismatch: %#v", task)
+	}
+}
+
+func TestMissingWorkflowPaneProjectsAsOrphanedWithoutTerminalGuess(t *testing.T) {
+	now := time.Now().UTC()
+	items := ProjectWithWorkflows(nil, []workflows.Result{{ID: "run-orphan", WorkflowID: workflows.SecurityScan, ProjectID: "alpha", Status: workflows.Running, PaneID: "%9", StartedAt: now, FinishedAt: now}}, tmuxadapter.Snapshot{Available: true, Sessions: []tmuxadapter.Session{}}, nil, now)
+	task, _ := Find(items, "run-orphan")
+	if task.Lifecycle != "orphaned" || task.CanJump || task.ExitResult != "unknown" || task.ExitCode != nil {
+		t.Fatalf("stale pane was overclaimed: %#v", task)
+	}
+}
+
+func TestDeadWorkflowPaneProjectsAsOrphaned(t *testing.T) {
+	now := time.Now().UTC()
+	items := ProjectWithWorkflows(nil, []workflows.Result{{ID: "run-dead", WorkflowID: workflows.ProjectTest, Status: workflows.Starting, PaneID: "%7", StartedAt: now, FinishedAt: now}}, tmuxadapter.Snapshot{Available: true, Sessions: []tmuxadapter.Session{{Windows: []tmuxadapter.Window{{Panes: []tmuxadapter.Pane{{ID: "%7", Dead: true}}}}}}}, nil, now)
+	task, _ := Find(items, "run-dead")
+	if task.Lifecycle != "orphaned" || task.CanJump {
+		t.Fatalf("dead pane remained resumable: %#v", task)
 	}
 }
 

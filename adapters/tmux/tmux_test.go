@@ -44,8 +44,8 @@ func (executor *fakeExecutor) Run(_ context.Context, request backend.ProcessRequ
 
 func TestSnapshotParsesStableTmuxHierarchy(t *testing.T) {
 	sep := snapshotSeparator
-	output := "$1" + sep + "zeta" + sep + "0" + sep + "@4" + sep + "2" + sep + "api" + sep + "0" + sep + "%8" + sep + "1" + sep + "0" + sep + "900" + sep + "/repo/api" + sep + "nvim\n" +
-		"$0" + sep + "alpha" + sep + "1" + sep + "@2" + sep + "0" + sep + "main" + sep + "1" + sep + "%3" + sep + "0" + sep + "1" + sep + "700" + sep + "/repo" + sep + "codex\n"
+	output := "$1" + sep + "zeta" + sep + "0" + sep + "@4" + sep + "2" + sep + "api" + sep + "0" + sep + "%8" + sep + "1" + sep + "0" + sep + "900" + sep + "/repo/api" + sep + "nvim" + sep + "0\n" +
+		"$0" + sep + "alpha" + sep + "1" + sep + "@2" + sep + "0" + sep + "main" + sep + "1" + sep + "%3" + sep + "0" + sep + "1" + sep + "700" + sep + "/repo" + sep + "codex" + sep + "0\n"
 	executor := &fakeExecutor{results: []backend.ProcessResult{{Stdout: output}}}
 	snapshot := New(executor, func(string) string { return "" }).Snapshot(context.Background())
 	if !snapshot.Available || len(snapshot.Sessions) != 2 {
@@ -64,7 +64,7 @@ func TestSnapshotParsesStableTmuxHierarchy(t *testing.T) {
 func TestSnapshotHandlesInterleavedRowsForSameWindow(t *testing.T) {
 	sep := snapshotSeparator
 	row := func(windowID, windowIndex, paneID, paneIndex string) string {
-		return "$0" + sep + "alpha" + sep + "1" + sep + windowID + sep + windowIndex + sep + "window" + sep + "0" + sep + paneID + sep + paneIndex + sep + "0" + sep + "700" + sep + "/repo" + sep + "zsh"
+		return "$0" + sep + "alpha" + sep + "1" + sep + windowID + sep + windowIndex + sep + "window" + sep + "0" + sep + paneID + sep + paneIndex + sep + "0" + sep + "700" + sep + "/repo" + sep + "zsh" + sep + "0"
 	}
 	output := strings.Join([]string{row("@2", "0", "%3", "0"), row("@3", "1", "%4", "0"), row("@2", "0", "%5", "1")}, "\n")
 	snapshot := New(&fakeExecutor{results: []backend.ProcessResult{{Stdout: output}}}, nil).Snapshot(context.Background())

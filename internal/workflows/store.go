@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,13 +106,24 @@ func (s *Store) Create(result Result) (string, error) {
 	})
 }
 func (s *Store) Claim(id string) (Result, string, error) {
+	deadline := time.Now().Add(750 * time.Millisecond)
+	for {
+		result, backup, err := s.claimOnce(id)
+		var conflict *ConflictError
+		if err == nil || !errors.As(err, &conflict) || !strings.Contains(conflict.Message, "from pending") || time.Now().After(deadline) {
+			return result, backup, err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+func (s *Store) claimOnce(id string) (Result, string, error) {
 	var claimed Result
 	backup, err := s.mutate(func(r *registry) error {
 		for i := range r.Results {
 			if r.Results[i].ID != id {
 				continue
 			}
-			if r.Results[i].Status != Pending {
+			if r.Results[i].Status != Starting {
 				return &ConflictError{Message: fmt.Sprintf("workflow run %s cannot be claimed from %s", id, r.Results[i].Status)}
 			}
 			r.Results[i].Status = Running
@@ -129,9 +141,10 @@ func (s *Store) MarkLaunched(id string, location LaunchLocation) (Result, string
 			if r.Results[i].ID != id {
 				continue
 			}
-			if r.Results[i].Status == Pending {
-				r.Results[i].Status = Running
+			if r.Results[i].Status != Pending {
+				return &ConflictError{Message: fmt.Sprintf("workflow run %s cannot launch from %s", id, r.Results[i].Status)}
 			}
+			r.Results[i].Status = Starting
 			r.Results[i].PaneID, r.Results[i].SessionName = location.PaneID, location.SessionName
 			updated = r.Results[i]
 			return nil
@@ -154,7 +167,7 @@ func (s *Store) completeActive(id string, completion Result) (Result, string, er
 			if r.Results[i].ID != id {
 				continue
 			}
-			if r.Results[i].Status != Pending && r.Results[i].Status != Running {
+			if r.Results[i].Status != Pending && r.Results[i].Status != Starting && r.Results[i].Status != Running {
 				return &ConflictError{Message: fmt.Sprintf("workflow run %s is already %s", id, r.Results[i].Status)}
 			}
 			current := r.Results[i]
@@ -235,7 +248,7 @@ func validateResult(result Result) error {
 		return errors.New("workflow result has an empty required field")
 	}
 	switch result.Status {
-	case Succeeded, Failed, TimedOut, Cancelled, Pending, Running:
+	case Succeeded, Failed, TimedOut, Cancelled, Pending, Starting, Running:
 	default:
 		return fmt.Errorf("workflow result has invalid status %q", result.Status)
 	}
@@ -248,7 +261,7 @@ func validateResult(result Result) error {
 	if result.Status == Succeeded && (result.ExitCode == nil || *result.ExitCode != 0) {
 		return errors.New("succeeded workflow result must have exit code 0")
 	}
-	if (result.Status == Pending || result.Status == Running) && result.ExitCode != nil {
+	if (result.Status == Pending || result.Status == Starting || result.Status == Running) && result.ExitCode != nil {
 		return errors.New("active workflow result must not have an exit code")
 	}
 	if len(result.Output) > OutputLimit {

@@ -26,7 +26,7 @@ Every read command supports `--json`; `run` also supports `--json`. JSON uses th
 ## Detached terminal lifecycle
 
 - The registered project path is loaded and canonicalized immediately before every run.
-- `run` first persists a `pending` record, then creates or reuses the project's tmux session and starts a new `wf-<id>` window. It returns after the stable pane reference is recorded as `running`; the HTTP request does not own the workflow lifetime.
+- `run` first persists `pending`, then creates or reuses the project's tmux session and starts a new `wf-<id>` window. After the stable pane reference is recorded the state becomes `starting` and the request returns; only the ownership-verified worker claim advances it to `running`.
 - The tmux window starts the current Workbench executable with only `workflows worker <run-id>`. Before claiming, the worker verifies through a short bounded handshake that its `$TMUX_PANE` ownership metadata matches the run ID. It then atomically claims once, rejects replay, re-loads the allowlisted workflow and project, and canonicalizes the registry path again.
 - Provider commands use an executable plus an argument array. The fixed tmux shell adapter quotes every internal worker argument; no caller command or path enters it.
 - Each worker has a fixed timeout. Cancellation terminates the spawned process tree (Unix process group or Windows `taskkill /T`).

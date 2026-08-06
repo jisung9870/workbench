@@ -36,6 +36,7 @@ const (
 	TimedOut  Status = "timed_out"
 	Cancelled Status = "cancelled"
 	Pending   Status = "pending"
+	Starting  Status = "starting"
 	Running   Status = "running"
 )
 
@@ -368,7 +369,7 @@ func (m *Manager) Jump(ctx context.Context, id string, allowAttach bool, getenv 
 	if err != nil {
 		return err
 	}
-	if !found || run.PaneID == "" || (run.Status != Pending && run.Status != Running) {
+	if !found || run.PaneID == "" || (run.Status != Pending && run.Status != Starting && run.Status != Running) {
 		return &UnavailableError{Message: "workflow task is not active in tmux"}
 	}
 	jumper, ok := m.launcher.(interface {

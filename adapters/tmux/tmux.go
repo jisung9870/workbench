@@ -45,6 +45,7 @@ type Pane struct {
 	PID            int    `json:"pid"`
 	CurrentPath    string `json:"current_path"`
 	CurrentCommand string `json:"current_command"`
+	Dead           bool   `json:"dead"`
 }
 
 type Adapter struct {
@@ -73,6 +74,7 @@ func (adapter *Adapter) Snapshot(ctx context.Context) Snapshot {
 		"#{window_id}", "#{window_index}", "#{window_name}", "#{window_active}",
 		"#{pane_id}", "#{pane_index}", "#{pane_active}", "#{pane_pid}",
 		"#{pane_current_path}", "#{pane_current_command}",
+		"#{pane_dead}",
 	}, snapshotSeparator)
 	result, runErr := adapter.executor.Run(observeCtx, backend.ProcessRequest{Name: command, Args: []string{"list-panes", "-a", "-F", format}})
 	if runErr != nil {
@@ -101,8 +103,8 @@ func parseSnapshot(contents string) (Snapshot, error) {
 			continue
 		}
 		fields := strings.Split(line, snapshotSeparator)
-		if len(fields) != 13 {
-			return Snapshot{}, fmt.Errorf("parse tmux snapshot line %d: expected 13 fields", lineNumber+1)
+		if len(fields) != 14 {
+			return Snapshot{}, fmt.Errorf("parse tmux snapshot line %d: expected 14 fields", lineNumber+1)
 		}
 		windowIndex, err := strconv.Atoi(fields[4])
 		if err != nil {
@@ -128,7 +130,7 @@ func parseSnapshot(contents string) (Snapshot, error) {
 			windows[fields[3]] = locator
 		}
 		window := &locator.session.Windows[locator.index]
-		window.Panes = append(window.Panes, Pane{ID: fields[7], Index: paneIndex, Active: fields[9] == "1", PID: pid, CurrentPath: fields[11], CurrentCommand: fields[12]})
+		window.Panes = append(window.Panes, Pane{ID: fields[7], Index: paneIndex, Active: fields[9] == "1", PID: pid, CurrentPath: fields[11], CurrentCommand: fields[12], Dead: fields[13] == "1"})
 	}
 	result := Snapshot{Available: true, Sessions: make([]Session, 0, len(sessions))}
 	for _, session := range sessions {

@@ -343,11 +343,11 @@ func TestLaunchPersistsBeforeDetachedTmuxAndReturnsRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != Running || result.PaneID != "%7" || launcher.executable != "/opt/wb" {
+	if result.Status != Starting || result.PaneID != "%7" || launcher.executable != "/opt/wb" {
 		t.Fatalf("unexpected detached launch: %#v launcher=%#v", result, launcher)
 	}
 	stored, found, err := store.Show(result.ID)
-	if err != nil || !found || stored.Status != Running {
+	if err != nil || !found || stored.Status != Starting {
 		t.Fatalf("pending/running record missing: %#v %v", stored, err)
 	}
 }
@@ -360,6 +360,9 @@ func TestWorkerClaimsOnceAndCompletesStoredAllowlist(t *testing.T) {
 	now := time.Now().UTC()
 	pending := Result{ID: "run-100-abcdef12", WorkflowID: ProjectTest, ProjectID: "alpha", Status: Pending, StartedAt: now, FinishedAt: now}
 	if _, err := store.Create(pending); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.MarkLaunched(pending.ID, LaunchLocation{PaneID: "%1", SessionName: "alpha"}); err != nil {
 		t.Fatal(err)
 	}
 	m := NewManager(fakeProjects{project: projects.Project{ID: "alpha", Path: root}, found: true}, store, &fakeExecutor{paths: map[string]string{"go": "/go"}, execution: Execution{ExitCode: 0, Output: "ok"}}, time.Now)
@@ -385,12 +388,42 @@ func TestWorkerTimeoutCompletesTerminalRecord(t *testing.T) {
 	if _, err := store.Create(pending); err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := store.MarkLaunched(pending.ID, LaunchLocation{PaneID: "%1", SessionName: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
 	m := NewManager(fakeProjects{project: projects.Project{ID: "alpha", Path: root}, found: true}, store, &fakeExecutor{paths: map[string]string{"go": "/go"}, wait: true}, time.Now)
 	m.launcher = &fakeLauncher{}
 	m.timeout = func(Definition) time.Duration { return time.Millisecond }
 	result, _, err := m.Worker(context.Background(), pending.ID)
 	if err != nil || result.Status != TimedOut {
 		t.Fatalf("timeout result=%#v err=%v", result, err)
+	}
+}
+
+func TestWorkerWaitsForStartingBeforeClaim(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example\n")
+	store := NewStore(config.Paths{StateDir: root, WorkflowsFile: filepath.Join(root, "workflows.json"), BackupsDir: filepath.Join(root, "backups")})
+	now := time.Now().UTC()
+	pending := Result{ID: "run-102-abcdef12", WorkflowID: ProjectTest, ProjectID: "alpha", Status: Pending, StartedAt: now, FinishedAt: now}
+	if _, err := store.Create(pending); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(fakeProjects{project: projects.Project{ID: "alpha", Path: root}, found: true}, store, &fakeExecutor{paths: map[string]string{"go": "/go"}, execution: Execution{ExitCode: 0}}, time.Now)
+	m.launcher = &fakeLauncher{}
+	done := make(chan error, 1)
+	go func() { _, _, err := m.Worker(context.Background(), pending.ID); done <- err }()
+	time.Sleep(25 * time.Millisecond)
+	starting, _, err := store.MarkLaunched(pending.ID, LaunchLocation{PaneID: "%2", SessionName: "alpha"})
+	if err != nil || starting.Status != Starting {
+		t.Fatalf("mark launched=%#v err=%v", starting, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	terminal, _, err := store.Show(pending.ID)
+	if err != nil || terminal.Status != Succeeded {
+		t.Fatalf("terminal=%#v err=%v", terminal, err)
 	}
 }
 
