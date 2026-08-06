@@ -97,6 +97,134 @@ func TestEnvironmentCRUDExportAndJSONContract(t *testing.T) {
 	}
 }
 
+func TestSecretsCLIJSONIsMetadataOnlyAndGetRejectsJSON(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	var stdout, stderr bytes.Buffer
+	if code := RunWithInput([]string{"secrets", "init", "--json"}, strings.NewReader(""), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("init code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	identityPath := filepath.Join(root, "config", "workbench", "age.key")
+	identity, err := os.ReadFile(identityPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(stdout.Bytes(), bytes.TrimSpace(identity)) {
+		t.Fatalf("identity leaked: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	const sentinel = "CLI-SECRET-SENTINEL\nline-two"
+	if code := RunWithInput([]string{"secrets", "set", "svc", "token", "--json"}, strings.NewReader(sentinel), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("set code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String(), sentinel) || strings.Contains(stderr.String(), sentinel) {
+		t.Fatalf("set leaked value stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	var envelope output.Envelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || !envelope.OK || envelope.SchemaVersion != 1 {
+		t.Fatalf("set envelope=%#v err=%v", envelope, err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "list", "--json"}, strings.NewReader(""), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("list code=%d stderr=%s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), sentinel) || !strings.Contains(stdout.String(), `"service":"svc"`) || !strings.Contains(stdout.String(), `"field":"token"`) {
+		t.Fatalf("unsafe list output: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "get", "svc", "token", "--json"}, strings.NewReader(""), &stdout, &stderr); code != ExitArgument {
+		t.Fatalf("get --json code=%d", code)
+	}
+	if strings.Contains(stdout.String(), sentinel) || strings.Contains(stderr.String(), sentinel) {
+		t.Fatal("get --json error leaked value")
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "get", "svc", "token"}, strings.NewReader(""), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("get code=%d stderr=%s", code, stderr.String())
+	}
+	if stdout.String() != sentinel+"\n" {
+		t.Fatalf("get=%q", stdout.String())
+	}
+}
+
+func TestSecretsCLIRejectsArgvValueAndOverwriteWithoutLeak(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	var stdout, stderr bytes.Buffer
+	if code := RunWithInput([]string{"secrets", "init"}, strings.NewReader(""), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("init=%d %s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "set", "svc", "field", "ARGV-SENTINEL"}, strings.NewReader(""), &stdout, &stderr); code != ExitArgument {
+		t.Fatalf("argv value code=%d", code)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "set", "svc", "field"}, strings.NewReader("FIRST-SENTINEL"), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("first set=%d %s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "set", "svc", "field", "--json"}, strings.NewReader("REPLACEMENT-SENTINEL"), &stdout, &stderr); code != ExitConflict {
+		t.Fatalf("overwrite code=%d", code)
+	}
+	if strings.Contains(stdout.String(), "REPLACEMENT-SENTINEL") || strings.Contains(stderr.String(), "REPLACEMENT-SENTINEL") {
+		t.Fatal("overwrite error leaked proposed value")
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "set", "svc", "field", "--replace", "--json"}, strings.NewReader("REPLACEMENT-SENTINEL"), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("replace code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String(), "REPLACEMENT-SENTINEL") || strings.Contains(stderr.String(), "REPLACEMENT-SENTINEL") || !strings.Contains(stdout.String(), `"replace_requested":true`) {
+		t.Fatalf("unsafe replace output=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "remove", "svc", "field"}, strings.NewReader("y\n"), &stdout, &stderr); code != ExitArgument {
+		t.Fatalf("noninteractive remove code=%d", code)
+	}
+	if !strings.Contains(stderr.String(), "requires --yes") {
+		t.Fatalf("missing noninteractive guard: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "remove", "svc", "field", "--yes", "--json"}, strings.NewReader(""), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("approved remove code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String(), "REPLACEMENT-SENTINEL") || !strings.Contains(stdout.String(), `"removed":true`) {
+		t.Fatalf("unsafe remove output: %s", stdout.String())
+	}
+}
+
+func TestSecretRemovalInteractiveConfirmation(t *testing.T) {
+	var stderr bytes.Buffer
+	confirmed, err := confirmSecretRemoval(strings.NewReader("n\n"), &stderr, "svc/token", false, true)
+	if err != nil || confirmed || !strings.Contains(stderr.String(), "[y/N]") {
+		t.Fatalf("cancel confirmed=%t err=%v prompt=%s", confirmed, err, stderr.String())
+	}
+	stderr.Reset()
+	confirmed, err = confirmSecretRemoval(strings.NewReader("YES\n"), &stderr, "svc/token", false, true)
+	if err != nil || !confirmed {
+		t.Fatalf("approval confirmed=%t err=%v", confirmed, err)
+	}
+	confirmed, err = confirmSecretRemoval(strings.NewReader(""), &stderr, "svc/token", true, false)
+	if err != nil || !confirmed {
+		t.Fatalf("--yes confirmed=%t err=%v", confirmed, err)
+	}
+}
+
 func TestEnvironmentMigrationCheckReadOnlyAndBlockedApplyJSON(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "wenv.d")

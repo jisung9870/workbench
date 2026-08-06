@@ -29,6 +29,12 @@ func TestResolvePathsUsesXDGDirectories(t *testing.T) {
 	if paths.EnvironmentsFile != filepath.Join("/tmp/example-config", "workbench", "environments.toml") {
 		t.Fatalf("unexpected environment registry path: %s", paths.EnvironmentsFile)
 	}
+	if paths.AgeIdentityFile != filepath.Join("/tmp/example-config", "workbench", "age.key") {
+		t.Fatalf("unexpected age identity path: %s", paths.AgeIdentityFile)
+	}
+	if paths.SecretsFile != filepath.Join("/tmp/example-config", "workbench", "secrets.json.age") {
+		t.Fatalf("unexpected secrets path: %s", paths.SecretsFile)
+	}
 	if paths.AgentsFile != filepath.Join("/tmp/example-state", "workbench", "agents.json") {
 		t.Fatalf("unexpected agent registry path: %s", paths.AgentsFile)
 	}

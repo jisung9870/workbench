@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	cmuxadapter "github.com/jisung9870/workbench/adapters/cmux"
 	gitadapter "github.com/jisung9870/workbench/adapters/git"
 	shelladapter "github.com/jisung9870/workbench/adapters/shell"
@@ -29,6 +31,7 @@ import (
 	"github.com/jisung9870/workbench/internal/migrate"
 	"github.com/jisung9870/workbench/internal/output"
 	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/secrets"
 	"github.com/jisung9870/workbench/internal/tasks"
 	"github.com/jisung9870/workbench/internal/workflows"
 	"github.com/jisung9870/workbench/internal/worktrees"
@@ -54,6 +57,10 @@ type commandError struct {
 func (err *commandError) Error() string { return err.Message }
 
 func Run(args []string, stdout, stderr io.Writer) int {
+	return RunWithInput(args, os.Stdin, stdout, stderr)
+}
+
+func RunWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	jsonMode := contains(args, "--json")
 	paths, err := config.ResolvePaths()
 	if err != nil {
@@ -69,6 +76,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		commandErr = runProjects(args[1:], paths, stdout)
 	case "env":
 		commandErr = runEnv(args[1:], paths, stdout, stderr)
+	case "secrets":
+		commandErr = runSecrets(args[1:], paths, stdin, stdout, stderr)
 	case "config":
 		commandErr = runConfig(args[1:], paths, stdout)
 	case "migrate":
@@ -1287,8 +1296,297 @@ func runConfig(args []string, paths config.Paths, stdout io.Writer) *commandErro
 	if _, err := environments.NewStore(paths).Load(); err != nil {
 		return configError(err)
 	}
-	fmt.Fprintf(stdout, "configuration valid\nconfig: %s\nprojects: %s\nenvironments: %s\n", paths.ConfigFile, paths.ProjectsFile, paths.EnvironmentsFile)
+	if err := secrets.NewStore(paths).Validate(); err != nil {
+		return configError(err)
+	}
+	fmt.Fprintf(stdout, "configuration valid\nconfig: %s\nprojects: %s\nenvironments: %s\nsecrets: %s\n", paths.ConfigFile, paths.ProjectsFile, paths.EnvironmentsFile, paths.SecretsFile)
 	return nil
+}
+
+func runSecrets(args []string, paths config.Paths, stdin io.Reader, stdout, stderr io.Writer) *commandError {
+	if len(args) == 0 {
+		return invalid("secrets subcommand is required")
+	}
+	store := secrets.NewStore(paths)
+	switch args[0] {
+	case "init":
+		jsonMode, err := exactJSONOption(args[1:], "usage: wb secrets init [--json]")
+		if err != nil {
+			return err
+		}
+		if initErr := store.Init(); initErr != nil {
+			return secretError(initErr)
+		}
+		metadata := map[string]any{"initialized": true, "identity_path": paths.AgeIdentityFile, "store_path": paths.SecretsFile}
+		if jsonMode {
+			if err := output.Write(stdout, metadata, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "initialized Workbench secrets\nidentity: %s\nstore: %s\n", paths.AgeIdentityFile, paths.SecretsFile)
+		return nil
+	case "list":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) > 1 {
+			return invalid("usage: wb secrets list [service] [--json]")
+		}
+		service := ""
+		if len(positionals) == 1 {
+			service = positionals[0]
+		}
+		entries, listErr := store.List(service)
+		if listErr != nil {
+			return secretError(listErr)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"entries": entries, "service": service}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		if service == "" {
+			seen := map[string]bool{}
+			for _, entry := range entries {
+				if !seen[entry.Service] {
+					fmt.Fprintln(stdout, entry.Service)
+					seen[entry.Service] = true
+				}
+			}
+		} else {
+			for _, entry := range entries {
+				fmt.Fprintln(stdout, entry.Field)
+			}
+		}
+		return nil
+	case "set":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false, "--replace": false})
+		if parseErr != nil || len(positionals) != 2 {
+			return invalid("usage: wb secrets set <service> <field> [--replace] [--json]")
+		}
+		value, inputErr := readSecretInput(stdin, stderr, positionals[0]+"/"+positionals[1])
+		if inputErr != nil {
+			return secretError(inputErr)
+		}
+		defer zeroBytes(value)
+		_, replace := options["--replace"]
+		backup, setErr := store.Set(positionals[0], positionals[1], value, replace)
+		if setErr != nil {
+			return secretError(setErr)
+		}
+		metadata := map[string]any{"service": positionals[0], "field": positionals[1], "stored": true, "replace_requested": replace, "backup": backup}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, metadata, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "stored %s/%s\n", positionals[0], positionals[1])
+		if backup != "" {
+			fmt.Fprintf(stdout, "backup %s\n", backup)
+		}
+		return nil
+	case "get":
+		for _, arg := range args[1:] {
+			if arg == "--json" {
+				return invalid("wb secrets get does not support --json because stdout is reserved for plaintext")
+			}
+		}
+		if len(args) < 2 || len(args) > 3 {
+			return invalid("usage: wb secrets get <service> [field]")
+		}
+		field := ""
+		if len(args) == 3 {
+			field = args[2]
+		}
+		value, _, getErr := store.Get(args[1], field)
+		if getErr != nil {
+			return secretError(getErr)
+		}
+		defer zeroBytes(value)
+		if written, err := stdout.Write(value); err != nil {
+			return generalError(err)
+		} else if written != len(value) {
+			return generalError(io.ErrShortWrite)
+		}
+		if len(value) == 0 || value[len(value)-1] != '\n' {
+			_, _ = fmt.Fprintln(stdout)
+		}
+		return nil
+	case "remove", "rm":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false, "--yes": false})
+		if parseErr != nil || len(positionals) < 1 || len(positionals) > 2 {
+			return invalid("usage: wb secrets remove <service> [field] [--yes] [--json]")
+		}
+		field := ""
+		if len(positionals) == 2 {
+			field = positionals[1]
+		}
+		target := positionals[0]
+		if field != "" {
+			target += "/" + field
+		}
+		_, assumeYes := options["--yes"]
+		confirmed, confirmErr := confirmSecretRemoval(stdin, stderr, target, assumeYes, isTerminalReader(stdin))
+		if confirmErr != nil {
+			return invalid("%s", confirmErr)
+		}
+		if !confirmed {
+			if _, jsonMode := options["--json"]; jsonMode {
+				if err := output.Write(stdout, map[string]any{"service": positionals[0], "field": field, "removed": false}, nil); err != nil {
+					return generalError(err)
+				}
+			} else {
+				fmt.Fprintln(stdout, "removal cancelled")
+			}
+			return nil
+		}
+		backup, removeErr := store.Remove(positionals[0], field)
+		if removeErr != nil {
+			return secretError(removeErr)
+		}
+		metadata := map[string]any{"service": positionals[0], "field": field, "removed": true, "backup": backup}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, metadata, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "removed %s\n", target)
+		if backup != "" {
+			fmt.Fprintf(stdout, "backup %s\n", backup)
+		}
+		return nil
+	case "migrate":
+		return runSecretsMigrate(args[1:], paths, stdout, stderr)
+	default:
+		return invalid("unknown secrets subcommand %q", args[0])
+	}
+}
+
+func runSecretsMigrate(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
+	if len(args) == 0 || args[0] != "check" && args[0] != "apply" {
+		return invalid("usage: wb secrets migrate check|apply [--json]")
+	}
+	mode := args[0]
+	jsonMode, parseErr := exactJSONOption(args[1:], "usage: wb secrets migrate check|apply [--json]")
+	if parseErr != nil {
+		return parseErr
+	}
+	plan, err := secrets.PlanMigration(secrets.DefaultLegacyPaths(paths), paths)
+	if err != nil {
+		return secretError(err)
+	}
+	if mode == "apply" && !plan.CanApply {
+		return &commandError{ExitCode: ExitConflict, Code: "SECRETS_MIGRATION_BLOCKED", Message: "legacy secrets migration is blocked; no destination files were changed", Details: map[string]any{"migration": plan}}
+	}
+	if mode == "apply" {
+		if err := secrets.ApplyMigration(plan, paths); err != nil {
+			return secretError(err)
+		}
+	}
+	warnings := []string{}
+	if mode == "apply" {
+		warnings = append(warnings, "legacy identity and store were retained; two decryptable copies exist until you deliberately retire one")
+	}
+	if jsonMode {
+		if err := output.Write(stdout, map[string]any{"migration": plan, "applied": mode == "apply"}, warnings); err != nil {
+			return generalError(err)
+		}
+		return nil
+	}
+	fmt.Fprintf(stdout, "legacy identity: %s\nlegacy store: %s\nidentity: %s mode=%s healthy=%t\nstore: mode=%s healthy=%t\ndecrypt: %t schema: %t names: %t\nservices: %d fields: %d\ndestination available: %t\ncan apply: %t\n", plan.SourceIdentity, plan.SourceStore, plan.IdentityType, plan.IdentityMode, plan.IdentityHealthy, plan.StoreMode, plan.StoreHealthy, plan.DecryptValid, plan.SchemaValid, plan.NamesValid, plan.ServiceCount, plan.FieldCount, plan.DestinationAvailable, plan.CanApply)
+	for _, issue := range plan.Issues {
+		fmt.Fprintf(stdout, "issue: %s\n", issue)
+	}
+	if mode == "check" {
+		fmt.Fprintln(stdout, "dry-run only; no files changed")
+	} else {
+		fmt.Fprintln(stdout, "migration applied; legacy files were not deleted")
+	}
+	for _, warning := range warnings {
+		fmt.Fprintf(stderr, "warning: %s\n", warning)
+	}
+	return nil
+}
+
+func exactJSONOption(args []string, usage string) (bool, *commandError) {
+	if len(args) == 0 {
+		return false, nil
+	}
+	if len(args) == 1 && args[0] == "--json" {
+		return true, nil
+	}
+	return false, invalid("%s", usage)
+}
+
+func readSecretInput(stdin io.Reader, stderr io.Writer, label string) ([]byte, error) {
+	if file, ok := stdin.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
+		fmt.Fprintf(stderr, "%s value: ", label)
+		value, err := term.ReadPassword(int(file.Fd()))
+		fmt.Fprintln(stderr)
+		if err != nil {
+			return nil, fmt.Errorf("read hidden secret value: %w", err)
+		}
+		if len(value) == 0 {
+			return nil, &secrets.InvalidError{Message: "secret value must not be empty"}
+		}
+		return value, nil
+	}
+	value, err := io.ReadAll(io.LimitReader(stdin, (16<<20)+1))
+	if err != nil {
+		return nil, fmt.Errorf("read secret value from stdin: %w", err)
+	}
+	if len(value) > 16<<20 {
+		return nil, &secrets.InvalidError{Message: "secret value is too large"}
+	}
+	if len(value) == 0 {
+		return nil, &secrets.InvalidError{Message: "secret value must not be empty"}
+	}
+	return value, nil
+}
+
+func zeroBytes(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
+}
+
+func isTerminalReader(reader io.Reader) bool {
+	file, ok := reader.(*os.File)
+	return ok && term.IsTerminal(int(file.Fd()))
+}
+
+func confirmSecretRemoval(stdin io.Reader, stderr io.Writer, target string, assumeYes, interactive bool) (bool, error) {
+	if assumeYes {
+		return true, nil
+	}
+	if !interactive {
+		return false, errors.New("non-interactive secret removal requires --yes")
+	}
+	fmt.Fprintf(stderr, "remove secret %s? [y/N] ", target)
+	answer, err := bufio.NewReader(stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("read removal confirmation: %w", err)
+	}
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes", nil
+}
+
+func secretError(err error) *commandError {
+	var invalidErr *secrets.InvalidError
+	if errors.As(err, &invalidErr) {
+		return invalid("%s", err)
+	}
+	var conflictErr *secrets.ConflictError
+	if errors.As(err, &conflictErr) {
+		return &commandError{ExitCode: ExitConflict, Code: "SECRET_CONFLICT", Message: err.Error()}
+	}
+	var notFoundErr *secrets.NotFoundError
+	if errors.As(err, &notFoundErr) {
+		return &commandError{ExitCode: ExitUnavailable, Code: "SECRET_NOT_FOUND", Message: err.Error()}
+	}
+	return generalError(err)
 }
 
 func runMigrate(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
@@ -1430,6 +1728,12 @@ Usage:
   wb env remove <id> [--json]
   wb env export <id> [--json]
   wb env migrate check|apply [--source <wenv.d>] [--json]
+  wb secrets init [--json]
+  wb secrets list [service] [--json]
+  wb secrets set <service> <field> [--replace] [--json]
+  wb secrets get <service> [field]
+  wb secrets remove <service> [field] [--yes] [--json]
+  wb secrets migrate check|apply [--json]
   wb open <project-id> [--backend <backend>] [--window <last|new|id>] [--terminal-mode <tab|split-auto|split-horizontal|split-vertical>]
   wb worktrees list <project-id> [--json]
   wb worktrees create <project-id> <branch> [--base <ref>]

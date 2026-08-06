@@ -13,10 +13,11 @@ session lifecycle remains a later slice.
 - Data contract: schema version 1
 
 The initial implementation uses the Go standard library for CLI parsing, JSON,
-filesystem, and process behavior. `github.com/BurntSushi/toml` v1.4.0 is the
-only runtime dependency because TOML is not part of the standard library. It is
-small, stable, supports strict unknown-field detection, and reports parser
-locations needed by `wb config validate`.
+filesystem, and process behavior. `github.com/BurntSushi/toml` v1.4.0 provides
+strict TOML decoding. `filippo.io/age` v1.3.1 provides the embedded age v1
+implementation for the local secrets store; Workbench does not shell out to
+`age` during normal secret operations. `golang.org/x/term` provides hidden TTY
+input.
 
 Remote repository creation and publishing are intentionally deferred. The
 module path reserves the planned GitHub location.
@@ -34,6 +35,12 @@ wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <
 wb env remove <id> [--json]
 wb env export <id> [--json]
 wb env migrate check|apply [--source <wenv.d>] [--json]
+wb secrets init [--json]
+wb secrets list [service] [--json]
+wb secrets set <service> <field> [--replace] [--json]
+wb secrets get <service> [field]
+wb secrets remove <service> [field] [--yes] [--json]
+wb secrets migrate check|apply [--json]
 wb open <id> [--backend auto|cmux|windows-terminal|tmux|shell]
 wb worktrees list <project-id> [--json]
 wb worktrees create <project-id> <branch> [--base <ref>]
@@ -64,6 +71,8 @@ Unix and WSL use:
 ${XDG_CONFIG_HOME:-~/.config}/workbench/config.toml
 ${XDG_CONFIG_HOME:-~/.config}/workbench/projects.toml
 ${XDG_CONFIG_HOME:-~/.config}/workbench/environments.toml
+${XDG_CONFIG_HOME:-~/.config}/workbench/age.key
+${XDG_CONFIG_HOME:-~/.config}/workbench/secrets.json.age
 ${XDG_CONFIG_HOME:-~/.config}/workbench/profiles/*.toml
 ${XDG_STATE_HOME:-~/.local/state}/workbench/backups/
 ${XDG_STATE_HOME:-~/.local/state}/workbench/worktrees.json
@@ -137,6 +146,37 @@ preserve the existing registry. Kube context/namespace mutation, secret
 references, and project/Task environment attachment are intentionally deferred;
 `exports` are ordinary plaintext configuration and must not contain secrets.
 See [docs/environments.md](docs/environments.md).
+
+## Local secrets
+
+`wb secrets` is a Workbench-owned, local-only age v1 secrets store compatible
+with the current binbox `sec` JSON shape. Secret values are accepted only from
+hidden terminal input or stdin, never as command arguments. Listing and JSON
+responses contain service/field metadata only; `get` deliberately rejects
+`--json` because its stdout is reserved for the requested plaintext. Existing
+fields require explicit `set --replace` for token rotation, and non-interactive
+deletion requires `remove --yes`.
+
+```bash
+wb secrets init
+printf '%s' "$TOKEN" | wb secrets set experiment token
+wb secrets list experiment
+TOKEN="$(wb secrets get experiment token)"
+```
+
+Legacy binbox files can be checked and copied without deleting or changing the
+source. `BINBOX_AGE_KEY` and `BINBOX_SECRETS_FILE` override the default
+`${XDG_CONFIG_HOME:-~/.config}/binbox` source paths. Apply refuses any existing
+Workbench identity or store. It intentionally leaves two decryptable copies;
+retiring the legacy copy is a separate manual decision after validation.
+
+```bash
+wb secrets migrate check
+wb secrets migrate apply
+```
+
+See [docs/secrets.md](docs/secrets.md) for the storage, migration, and deferred
+feature contracts.
 
 An optional active profile can select a backend and machine-local Windows
 Terminal launch preferences:
