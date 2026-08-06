@@ -97,6 +97,159 @@ func TestEnvironmentCRUDExportAndJSONContract(t *testing.T) {
 	}
 }
 
+func TestEnvironmentSecretReferencesHealthAndExplicitExport(t *testing.T) {
+	const sentinel = "ENV-SECRET-'SENTINEL"
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	var stdout, stderr bytes.Buffer
+	if code := RunWithInput([]string{"secrets", "init"}, strings.NewReader(""), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("init=%d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "set", "service", "token"}, strings.NewReader(sentinel), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("set=%d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "add", "dev", "--set", "FEATURE=on", "--secret", "TOKEN=sec://service/token", "--secret", "MISSING=sec://service/missing", "--json"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("add=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String()+stderr.String(), sentinel) || !strings.Contains(stdout.String(), `"TOKEN":"sec://service/token"`) {
+		t.Fatalf("unsafe add output stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "health", "dev", "--json"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("health=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	combined := stdout.String() + stderr.String()
+	if strings.Contains(combined, sentinel) || !strings.Contains(stdout.String(), `"reason":"missing"`) || !strings.Contains(stdout.String(), `"available":true`) {
+		t.Fatalf("unsafe health output stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "export", "dev"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("plain export=%d stderr=%s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String()+stderr.String(), sentinel) || strings.Contains(stdout.String(), "TOKEN") || !strings.Contains(stderr.String(), "secret references were not resolved") {
+		t.Fatalf("unsafe plain export stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "export", "dev", "--resolve-secrets"}, &stdout, &stderr); code != ExitUnavailable {
+		t.Fatalf("missing resolve=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String()+stderr.String(), sentinel) {
+		t.Fatalf("failed resolution leaked value stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "remove", "dev"}, &stdout, &stderr); code != ExitOK {
+		t.Fatal(stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "add", "ready", "--set", "FEATURE=on", "--secret", "TOKEN=sec://service/token"}, &stdout, &stderr); code != ExitOK {
+		t.Fatal(stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "export", "ready", "--resolve-secrets"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("resolve=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	expected := "export FEATURE='on'\nexport TOKEN='ENV-SECRET-'\\''SENTINEL'\n"
+	if stdout.String() != expected {
+		t.Fatalf("resolved shell output=%q", stdout.String())
+	}
+}
+
+func TestEnvironmentSecretReferenceArgumentsAndTerminalGuard(t *testing.T) {
+	const malformedSentinel = "MALFORMED-REFERENCE-SENTINEL"
+	for _, args := range [][]string{
+		{"env", "add", "dev", "--secret", "TOKEN=" + malformedSentinel},
+		{"env", "add", "dev", "--secret", "TOKEN=sec://service/token", "--set", "TOKEN=plain"},
+		{"env", "add", "dev", "--set", "TOKEN=plain", "--secret", "TOKEN=sec://service/token"},
+		{"env", "add", "dev", "--secret", "TOKEN=sec://service/token", "--secret", "TOKEN=sec://service/other"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := Run(args, &stdout, &stderr); code != ExitArgument {
+			t.Fatalf("args=%v code=%d stdout=%s stderr=%s", args, code, stdout.String(), stderr.String())
+		}
+		if strings.Contains(stdout.String()+stderr.String(), malformedSentinel) {
+			t.Fatalf("malformed reference value leaked: stdout=%s stderr=%s", stdout.String(), stderr.String())
+		}
+	}
+	if err := validateEnvExportOptions(true, true, false); err == nil {
+		t.Fatal("expected JSON and secret resolution conflict")
+	}
+	if err := validateEnvExportOptions(false, true, true); err == nil || !strings.Contains(err.Message, "terminal") {
+		t.Fatalf("expected terminal refusal, got %#v", err)
+	}
+}
+
+func TestEnvironmentHealthSanitizesBrokenIdentity(t *testing.T) {
+	const identitySentinel = "AGE-SECRET-KEY-1-RAW-IDENTITY-SENTINEL"
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"env", "add", "dev", "--secret", "TOKEN=sec://service/token"}, &stdout, &stderr); code != ExitOK {
+		t.Fatal(stderr.String())
+	}
+	identityPath := filepath.Join(root, "config", "workbench", "age.key")
+	if err := os.WriteFile(identityPath, []byte(identitySentinel+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "health", "dev", "--json"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("health=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String()+stderr.String(), identitySentinel) || !strings.Contains(stdout.String(), `"reason":"store_unavailable"`) {
+		t.Fatalf("identity leaked or reason missing stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+}
+
+func TestEnvironmentResolvedExportRejectsNULWithoutOutputOrLeak(t *testing.T) {
+	const sentinel = "NUL-SECRET-SENTINEL"
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	var stdout, stderr bytes.Buffer
+	if code := RunWithInput([]string{"secrets", "init"}, strings.NewReader(""), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("init=%d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "set", "service", "nul"}, strings.NewReader(sentinel+"\x00tail"), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("set=%d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "add", "dev", "--set", "FIRST=must-not-be-partially-written", "--secret", "TOKEN=sec://service/nul"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("add=%d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "export", "dev", "--resolve-secrets"}, &stdout, &stderr); code != ExitGeneral {
+		t.Fatalf("export=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("NUL rejection wrote partial stdout: %q", stdout.String())
+	}
+	if strings.Contains(stderr.String(), sentinel) || strings.Contains(stderr.String(), "tail") || !strings.Contains(stderr.String(), "contains NUL") {
+		t.Fatalf("unsafe or unclear error: %q", stderr.String())
+	}
+}
+
 func TestSecretsCLIJSONIsMetadataOnlyAndGetRejectsJSON(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))

@@ -31,9 +31,10 @@ wb projects add <path> [--id <id>] [--profile <profile>]
 wb projects remove <id>
 wb env list [--json]
 wb env show <id> [--json]
-wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--json]
+wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--secret KEY=sec://service/field]... [--json]
 wb env remove <id> [--json]
-wb env export <id> [--json]
+wb env health <id> [--json]
+wb env export <id> [--resolve-secrets] [--json]
 wb env migrate check|apply [--source <wenv.d>] [--json]
 wb secrets init [--json]
 wb secrets list [service] [--json]
@@ -136,6 +137,7 @@ presets can be inspected and migrated without executing them:
 wb env migrate check
 wb env migrate apply
 eval "$(wb env export dev)"
+eval "$(wb env export dev --resolve-secrets)"
 ```
 
 The parser accepts only `AWS_PROFILE`, `AWS_REGION`, `KUBE_CONTEXT`,

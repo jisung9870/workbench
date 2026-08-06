@@ -22,6 +22,7 @@ type Environment struct {
 	KubeContext   string            `toml:"kube_context,omitempty" json:"kube_context,omitempty"`
 	KubeNamespace string            `toml:"kube_namespace,omitempty" json:"kube_namespace,omitempty"`
 	Exports       map[string]string `toml:"exports,omitempty" json:"exports"`
+	Secrets       map[string]string `toml:"secrets,omitempty" json:"secrets"`
 }
 
 type Registry struct {
@@ -59,6 +60,9 @@ func (s *Store) Load() (Registry, error) {
 	for i := range registry.Environments {
 		if registry.Environments[i].Exports == nil {
 			registry.Environments[i].Exports = map[string]string{}
+		}
+		if registry.Environments[i].Secrets == nil {
+			registry.Environments[i].Secrets = map[string]string{}
 		}
 	}
 	if err := ValidateRegistry(registry); err != nil {
@@ -182,6 +186,20 @@ func ValidateRegistry(registry Registry) error {
 				return &InvalidError{Message: fmt.Sprintf("environment %q export key %q must use its dedicated field", environment.ID, key)}
 			}
 		}
+		for key, reference := range environment.Secrets {
+			if !ValidVariableName(key) {
+				return &InvalidError{Message: fmt.Sprintf("environment %q secret key %q is invalid", environment.ID, key)}
+			}
+			if ReservedKey(key) {
+				return &InvalidError{Message: fmt.Sprintf("environment %q secret key %q conflicts with a dedicated field", environment.ID, key)}
+			}
+			if _, exists := environment.Exports[key]; exists {
+				return &ConflictError{Message: fmt.Sprintf("environment %q variable %q is defined by both exports and secrets", environment.ID, key)}
+			}
+			if _, err := ParseSecretReference(reference); err != nil {
+				return &InvalidError{Message: fmt.Sprintf("environment %q secret key %q: %s", environment.ID, key, err)}
+			}
+		}
 	}
 	return nil
 }
@@ -257,6 +275,9 @@ func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'
 func normalized(environment Environment) Environment {
 	if environment.Exports == nil {
 		environment.Exports = map[string]string{}
+	}
+	if environment.Secrets == nil {
+		environment.Secrets = map[string]string{}
 	}
 	return environment
 }

@@ -166,7 +166,7 @@ func ApplyWenv(plan MigrationPlan, store *Store) (string, error) {
 }
 
 func ParseWenv(id string, reader io.Reader) (Environment, error) {
-	environment := Environment{ID: id, Exports: map[string]string{}}
+	environment := Environment{ID: id, Exports: map[string]string{}, Secrets: map[string]string{}}
 	seen := map[string]struct{}{}
 	scanner := bufio.NewScanner(reader)
 	lineNumber := 0
@@ -450,11 +450,16 @@ func allowedPresetKey(key string) bool {
 }
 
 func Equal(left, right Environment) bool {
-	if left.ID != right.ID || left.AWSProfile != right.AWSProfile || left.AWSRegion != right.AWSRegion || left.KubeContext != right.KubeContext || left.KubeNamespace != right.KubeNamespace || len(left.Exports) != len(right.Exports) {
+	if left.ID != right.ID || left.AWSProfile != right.AWSProfile || left.AWSRegion != right.AWSRegion || left.KubeContext != right.KubeContext || left.KubeNamespace != right.KubeNamespace || len(left.Exports) != len(right.Exports) || len(left.Secrets) != len(right.Secrets) {
 		return false
 	}
 	for key, value := range left.Exports {
 		if right.Exports[key] != value {
+			return false
+		}
+	}
+	for key, value := range left.Secrets {
+		if right.Secrets[key] != value {
 			return false
 		}
 	}

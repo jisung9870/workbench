@@ -15,21 +15,41 @@ wb env list [--json]
 wb env show <id> [--json]
 wb env add <id> [--aws-profile <value>] [--aws-region <value>]
                 [--kube-context <value>] [--kube-namespace <value>]
-                [--set KEY=VALUE]... [--json]
+                [--set KEY=VALUE]...
+                [--secret KEY=sec://service/field]... [--json]
 wb env remove <id> [--json]
-wb env export <id> [--json]
+wb env health <id> [--json]
+wb env export <id> [--resolve-secrets] [--json]
 wb env migrate check|apply [--source <wenv.d>] [--json]
 ```
 
 All JSON forms use the standard schema-v1 Workbench envelope. An environment
-contains `id`, optional AWS and kube fields, and an `exports` object. Migration
+contains `id`, optional AWS and kube fields, an `exports` object, and a
+`secrets` object whose values are references such as `sec://github/token`.
+Secret reference names are metadata; resolved values never appear in list,
+show, health, migration, or JSON output. Migration
 responses contain the resolved source directory, `can_apply`, counts, and one
 item per preset with `ready`, `existing`, `unsupported`, or `conflict` status.
 `check` is read-only even when every item is ready.
 
-`wb env export <id>` emits only POSIX-compatible, single-quoted export lines
-for `AWS_PROFILE`, `AWS_REGION`, and `exports`. Keys are validated as shell
-variable names and output is sorted. Kube fields are returned as
+`wb env health <id>` checks each reference and reports only `available`,
+`missing`, or `store_unavailable`. A missing store or invalid/wrong identity is
+reported as unavailable without exposing identity material or decryption
+diagnostics.
+
+By default, `wb env export <id>` emits only POSIX-compatible, single-quoted
+export lines for `AWS_PROFILE`, `AWS_REGION`, and ordinary `exports`. It warns
+when secret references remain unresolved. `--resolve-secrets` decrypts them in
+memory and adds them to the same sorted shell output. This flag cannot be used
+with `--json` and refuses a terminal stdout; use it only through command
+substitution or a pipe:
+
+```bash
+eval "$(wb env export dev --resolve-secrets)"
+```
+
+Keys are validated as shell variable names. A secret key cannot collide with
+an ordinary export or a typed AWS/kube field. Kube fields are returned as
 `pending_mutations` in JSON and produce a warning in text mode; this slice does
 not call `kubectl` or claim that context was changed.
 
@@ -64,8 +84,6 @@ ready records are committed in one registry replacement.
 
 ## Deferred Phase 5 scope
 
-This registry has no secret type, encryption, redaction, or secret-reference
-resolution. Values in `exports` are persisted as ordinary plaintext
-configuration, so secret values should not be added or migrated in this slice.
-Secret references/injection, kube mutation, project or Task attachment, scoped
-process launch, expiry policy, and Dashboard controls remain later Phase 5 work.
+Project or Task attachment, scoped subprocess injection, kube mutation, expiry
+policy, and Dashboard controls remain later Phase 5 work. Ordinary `exports`
+remain plaintext configuration and must not contain secret values.

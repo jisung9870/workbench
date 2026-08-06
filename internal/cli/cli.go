@@ -1052,6 +1052,14 @@ func runEnv(args []string, paths config.Paths, stdout, stderr io.Writer) *comman
 		for _, key := range keys {
 			fmt.Fprintf(stdout, "export: %s=%s\n", key, item.Exports[key])
 		}
+		secretKeys := make([]string, 0, len(item.Secrets))
+		for key := range item.Secrets {
+			secretKeys = append(secretKeys, key)
+		}
+		sort.Strings(secretKeys)
+		for _, key := range secretKeys {
+			fmt.Fprintf(stdout, "secret: %s=%s\n", key, item.Secrets[key])
+		}
 		return nil
 	case "add":
 		item, jsonMode, parseErr := parseEnvAdd(args[1:])
@@ -1097,9 +1105,14 @@ func runEnv(args []string, paths config.Paths, stdout, stderr io.Writer) *comman
 		}
 		return nil
 	case "export":
-		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false, "--resolve-secrets": false})
 		if parseErr != nil || len(positionals) != 1 {
-			return invalid("usage: wb env export <id> [--json]")
+			return invalid("usage: wb env export <id> [--resolve-secrets] [--json]")
+		}
+		_, jsonMode := options["--json"]
+		_, resolveSecrets := options["--resolve-secrets"]
+		if optionErr := validateEnvExportOptions(jsonMode, resolveSecrets, isTerminalWriter(stdout)); optionErr != nil {
+			return optionErr
 		}
 		item, found, err := store.Show(positionals[0])
 		if err != nil {
@@ -1119,16 +1132,63 @@ func runEnv(args []string, paths config.Paths, stdout, stderr io.Writer) *comman
 		if len(pending) > 0 {
 			warnings = append(warnings, "kube context/namespace mutation is not implemented; wb env export emits environment variables only")
 		}
-		if _, jsonMode := options["--json"]; jsonMode {
-			if err := output.Write(stdout, map[string]any{"environment": item, "exports": environments.ExportValues(item), "pending_mutations": pending}, warnings); err != nil {
+		secretStatuses := environments.PendingSecretReferences(item)
+		if len(secretStatuses) > 0 && !resolveSecrets {
+			warnings = append(warnings, "secret references were not resolved; use --resolve-secrets with command substitution or a pipe")
+		}
+		if jsonMode {
+			if err := output.Write(stdout, map[string]any{"environment": item, "exports": environments.ExportValues(item), "secret_references": secretStatuses, "pending_mutations": pending}, warnings); err != nil {
 				return generalError(err)
 			}
 			return nil
 		}
+		resolved := map[string][]byte{}
+		if resolveSecrets {
+			var resolveErr error
+			resolved, secretStatuses, resolveErr = environments.ResolveSecretReferences(item, secrets.NewStore(paths))
+			if resolveErr != nil {
+				return &commandError{ExitCode: ExitUnavailable, Code: "ENVIRONMENT_SECRETS_UNAVAILABLE", Message: resolveErr.Error(), Details: map[string]any{"secret_references": secretStatuses}}
+			}
+			defer environments.ZeroResolvedSecrets(resolved)
+		}
 		for _, warning := range warnings {
 			fmt.Fprintf(stderr, "warning: %s\n", warning)
 		}
-		fmt.Fprint(stdout, environments.ShellExports(item))
+		if err := environments.WriteShellExports(stdout, item, resolved); err != nil {
+			return generalError(err)
+		}
+		return nil
+	case "health":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) != 1 {
+			return invalid("usage: wb env health <id> [--json]")
+		}
+		item, found, err := store.Show(positionals[0])
+		if err != nil {
+			return configError(err)
+		}
+		if !found {
+			return envNotFound(positionals[0])
+		}
+		statuses := environments.CheckSecretReferences(item, secrets.NewStore(paths))
+		available := true
+		for _, status := range statuses {
+			available = available && status.Available
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"environment_id": item.ID, "available": available, "secret_references": statuses}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "environment: %s\navailable: %t\n", item.ID, available)
+		for _, status := range statuses {
+			state := "available"
+			if !status.Available {
+				state = status.Reason
+			}
+			fmt.Fprintf(stdout, "%s\t%s\t%s\n", state, status.Variable, status.Reference)
+		}
 		return nil
 	case "migrate":
 		return runEnvMigrate(args[1:], paths, stdout, stderr)
@@ -1138,7 +1198,7 @@ func runEnv(args []string, paths config.Paths, stdout, stderr io.Writer) *comman
 }
 
 func parseEnvAdd(args []string) (environments.Environment, bool, *commandError) {
-	item := environments.Environment{Exports: map[string]string{}}
+	item := environments.Environment{Exports: map[string]string{}, Secrets: map[string]string{}}
 	jsonMode := false
 	positionals := []string{}
 	for index := 0; index < len(args); index++ {
@@ -1188,13 +1248,31 @@ func parseEnvAdd(args []string) (environments.Environment, bool, *commandError) 
 			if _, exists := item.Exports[key]; exists {
 				return item, false, invalid("duplicate --set key %q", key)
 			}
+			if _, exists := item.Secrets[key]; exists {
+				return item, false, invalid("variable %q cannot be provided by both --set and --secret", key)
+			}
 			item.Exports[key] = exportValue
+		case "--secret":
+			key, reference, found := strings.Cut(value, "=")
+			if !found || !environments.ValidVariableName(key) || environments.ReservedKey(key) {
+				return item, false, invalid("--secret requires a non-reserved KEY=sec://service/field")
+			}
+			if _, exists := item.Secrets[key]; exists {
+				return item, false, invalid("duplicate --secret key %q", key)
+			}
+			if _, exists := item.Exports[key]; exists {
+				return item, false, invalid("variable %q cannot be provided by both --set and --secret", key)
+			}
+			if _, err := environments.ParseSecretReference(reference); err != nil {
+				return item, false, invalid("invalid --secret reference for %q: %s", key, err)
+			}
+			item.Secrets[key] = reference
 		default:
 			return item, false, invalid("unknown option %q", argument)
 		}
 	}
 	if len(positionals) != 1 {
-		return item, false, invalid("usage: wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--json]")
+		return item, false, invalid("usage: wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--secret KEY=sec://service/field]... [--json]")
 	}
 	item.ID = positionals[0]
 	if err := environments.ValidateRegistry(environments.Registry{SchemaVersion: environments.SchemaVersion, Environments: []environments.Environment{item}}); err != nil {
@@ -1557,6 +1635,21 @@ func isTerminalReader(reader io.Reader) bool {
 	return ok && term.IsTerminal(int(file.Fd()))
 }
 
+func isTerminalWriter(writer io.Writer) bool {
+	file, ok := writer.(*os.File)
+	return ok && term.IsTerminal(int(file.Fd()))
+}
+
+func validateEnvExportOptions(jsonMode, resolveSecrets, outputIsTerminal bool) *commandError {
+	if jsonMode && resolveSecrets {
+		return invalid("--resolve-secrets cannot be combined with --json")
+	}
+	if resolveSecrets && outputIsTerminal {
+		return invalid("--resolve-secrets refuses to write secret values to a terminal; use command substitution or a pipe")
+	}
+	return nil
+}
+
 func confirmSecretRemoval(stdin io.Reader, stderr io.Writer, target string, assumeYes, interactive bool) (bool, error) {
 	if assumeYes {
 		return true, nil
@@ -1724,9 +1817,10 @@ Usage:
   wb projects remove <id>
   wb env list [--json]
   wb env show <id> [--json]
-  wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--json]
+  wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--secret KEY=sec://service/field]... [--json]
   wb env remove <id> [--json]
-  wb env export <id> [--json]
+  wb env health <id> [--json]
+  wb env export <id> [--resolve-secrets] [--json]
   wb env migrate check|apply [--source <wenv.d>] [--json]
   wb secrets init [--json]
   wb secrets list [service] [--json]
