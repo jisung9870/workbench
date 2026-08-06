@@ -13,7 +13,11 @@ import (
 	"testing"
 	"time"
 
+	binboxadapter "github.com/jisung9870/workbench/adapters/binbox"
 	"github.com/jisung9870/workbench/internal/output"
+	"github.com/jisung9870/workbench/internal/overview"
+	"github.com/jisung9870/workbench/internal/tasks"
+	"github.com/jisung9870/workbench/internal/workflows"
 )
 
 type fakeService struct {
@@ -28,7 +32,7 @@ func (service *fakeService) Execute(_ context.Context, request ActionRequest) (A
 }
 
 func TestHandlerServesVersionedSnapshotWithSecurityHeaders(t *testing.T) {
-	handler, err := NewHandler(&fakeService{snapshot: Snapshot{Platform: "linux", Profile: "personal", Agents: []AgentTask{{Lifecycle: "terminal"}}}}, "secret")
+	handler, err := NewHandler(&fakeService{snapshot: Snapshot{Platform: "linux", Profile: "personal", Agents: []AgentTask{{Lifecycle: "terminal"}}, Tasks: []tasks.Task{{ID: "tmux:%3", Kind: "codex", Provenance: "observed", Ownership: "unmanaged", Confidence: "inferred", StateSource: "tmux", Lifecycle: "running", ExitResult: "unknown"}}, Overview: overview.Summary{Counts: overview.Counts{ActiveObservedTasks: 1}, Attention: []overview.Attention{}, WorkLocations: []overview.WorkLocation{{TaskID: "tmux:%3", CanJump: true}}, ToolHealth: binboxadapter.Report{Provider: "binbox", Available: false, Reason: "bb executable was not found", Capabilities: []binboxadapter.Capability{}}}}}, "secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +54,16 @@ func TestHandlerServesVersionedSnapshotWithSecurityHeaders(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `"lifecycle":"terminal"`) {
 		t.Fatalf("snapshot omitted server-owned lifecycle classification: %s", response.Body.String())
 	}
+	for _, field := range []string{`"provenance":"observed"`, `"ownership":"unmanaged"`, `"confidence":"inferred"`, `"exit_result":"unknown"`} {
+		if !strings.Contains(response.Body.String(), field) {
+			t.Fatalf("snapshot omitted observed Task field %s: %s", field, response.Body.String())
+		}
+	}
+	for _, field := range []string{`"active_observed_tasks":1`, `"work_locations"`, `"tool_health"`, `"provider":"binbox"`} {
+		if !strings.Contains(response.Body.String(), field) {
+			t.Fatalf("snapshot omitted overview field %s: %s", field, response.Body.String())
+		}
+	}
 }
 
 func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
@@ -62,9 +76,9 @@ func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
 		contentType string
 		contains    []string
 	}{
-		{path: "/", contentType: "text/html", contains: []string{`id="theme-select"`, `href="/guide"`, `/assets/theme.js`, `id="agent-history"`, `id="agent-registry-path"`, `id="clear-agent-history"`, `id="task-terminal-note"`}},
+		{path: "/", contentType: "text/html", contains: []string{`id="theme-select"`, `href="/guide"`, `/assets/theme.js`, `id="overview-heading"`, `id="overview-attention"`, `id="overview-locations"`, `id="overview-tools"`, `id="tmux-sessions"`, `id="tmux-availability"`, `id="unregistered-tasks"`, `id="agent-history"`, `id="agent-registry-path"`, `id="clear-agent-history"`, `id="workflows"`, `id="workflow-history"`, `id="task-terminal-note"`, `data-task-action="jump_task"`, `data-task-action="stop_task"`}},
 		{path: "/guide", contentType: "text/html", contains: []string{`id="guide-search"`, `id="architecture"`, `id="cli-reference"`, `id="troubleshooting"`, `/assets/dashboard-overview-light.jpg`, `alt="Workbench Dashboard 화면 구성`}},
-		{path: "/assets/app.js", contentType: "text/javascript", contains: []string{`task.lifecycle === "active"`, `clear_agent_history`, `agent_registry_path`, `task-terminal-note`}},
+		{path: "/assets/app.js", contentType: "text/javascript", contains: []string{`"starting", "running", "waiting", "idle"`, `task.provenance`, `renderOverview`, `work_locations`, `tool_health`, `clear_agent_history`, `agent_registry_path`, `workflow_id`, `run_workflow`, `data-workflow-id`, `task-terminal-note`}},
 		{path: "/assets/theme.js", contentType: "text/javascript", contains: []string{"workbench.dashboard.theme.v1", "localStorage"}},
 		{path: "/assets/guide.js", contentType: "text/javascript", contains: []string{"guide-search", "IntersectionObserver"}},
 		{path: "/assets/dashboard-overview-light.jpg", contentType: "image/jpeg"},
@@ -167,6 +181,33 @@ func TestHandlerRejectsUnknownActionFields(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || service.actions.Load() != 0 {
 		t.Fatalf("unknown action field was accepted: status=%d calls=%d", response.Code, service.actions.Load())
+	}
+}
+
+func TestHandlerAcceptsOnlyTypedWorkflowActionFields(t *testing.T) {
+	service := &fakeService{}
+	handler, err := NewHandler(service, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "http://workbench.local/api/v1/actions", strings.NewReader(`{"action":"run_workflow","project_id":"alpha","workflow_id":"project.test","args":["--unsafe"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Workbench-Token", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || service.actions.Load() != 0 {
+		t.Fatalf("workflow args reached service: status=%d calls=%d", response.Code, service.actions.Load())
+	}
+}
+
+func TestSafeWorkflowRunOmitsCapturedOutput(t *testing.T) {
+	result := workflows.Result{ID: "run-1", WorkflowID: workflows.ProjectTest, ProjectID: "alpha", Status: workflows.Succeeded, Output: "SECRET_VALUE", OutputTruncated: true}
+	encoded, err := json.Marshal(SafeWorkflowRun(result))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "SECRET_VALUE") || !strings.Contains(string(encoded), `"output_truncated":true`) {
+		t.Fatalf("unsafe workflow response: %s", encoded)
 	}
 }
 

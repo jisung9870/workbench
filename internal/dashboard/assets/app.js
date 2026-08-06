@@ -13,11 +13,15 @@ function notice(message, error = false) {
 }
 
 function isActiveTask(task) {
-  return task.lifecycle === "active";
+  return ["active", "pending", "starting", "running", "waiting", "idle"].includes(task.lifecycle);
 }
 
 function taskCard(task) {
-  return `<button class="agent-card ${task.id === state.taskId ? "selected" : ""}" data-task="${esc(task.id)}"><span class="agent-head"><span class="avatar">${esc(task.agent_kind[0])}</span><span class="status ${esc(task.state)}">${esc(task.state)}</span></span><strong>${esc(task.agent_kind)}</strong><small>${esc(task.backend)} · ${esc(task.id)}</small></button>`;
+  const kind = task.kind || task.agent_kind || "task";
+  const lifecycle = task.lifecycle || task.state || "unknown";
+  const provenance = task.provenance || "managed";
+  const location = task.runtime_location?.pane_id || task.managed?.backend || task.backend || "unknown";
+  return `<button class="agent-card ${task.id === state.taskId ? "selected" : ""}" data-task="${esc(task.id)}"><span class="agent-head"><span class="avatar">${esc(kind[0])}</span><span class="task-badges"><span class="provenance ${esc(provenance)}">${esc(provenance)}</span><span class="status ${esc(lifecycle)}">${esc(lifecycle)}</span></span></span><strong>${esc(kind)}</strong><small>${esc(location)} · ${esc(task.id)}</small></button>`;
 }
 
 async function load() {
@@ -62,7 +66,8 @@ function bindTaskCards() {
 }
 
 function render() {
-  const data = state.snapshot;
+	const data = state.snapshot;
+  const tasks = data.tasks || data.agents || [];
   $("platform").textContent = data.platform;
   $("profile").textContent = data.profile;
   $("project-count").textContent = data.projects.length;
@@ -72,8 +77,12 @@ function render() {
   $("health-detail").textContent = `${data.doctor.summary.available} available · ${data.doctor.summary.unavailable_optional} optional missing`;
   document.querySelector(".pulse").classList.toggle("ok", !missing);
 
+  renderTmux(data.tmux || { available: false, reason: "tmux observation unavailable", sessions: [] });
+  renderUnregisteredTasks(tasks);
+  renderOverview(data.overview || { counts: {}, attention: [], work_locations: [], tool_health: data.tool_health || { available: false, capabilities: [], summary: {} } });
+
   $("projects").innerHTML = data.projects.map(project => {
-    const activeCount = data.agents.filter(task => task.project_id === project.id && isActiveTask(task)).length;
+    const activeCount = tasks.filter(task => task.project_id === project.id && isActiveTask(task)).length;
     return `<button class="project ${project.id === state.projectId ? "active" : ""}" data-project="${esc(project.id)}"><span class="project-dot"></span><span class="project-name">${esc(project.name)}</span><span class="project-meta">${activeCount}</span></button>`;
   }).join("");
   document.querySelectorAll("[data-project]").forEach(button => {
@@ -94,11 +103,13 @@ function render() {
 
   $("project-name").textContent = project.name;
   $("project-path").textContent = project.path;
-  const projectTasks = data.agents.filter(task => task.project_id === project.id);
+  const projectTasks = tasks.filter(task => task.project_id === project.id);
   const activeTasks = projectTasks.filter(isActiveTask);
   const historyTasks = projectTasks.filter(task => !isActiveTask(task));
   const worktrees = data.worktrees.filter(item => item.project_id === project.id);
   const changes = data.changes.find(item => item.project_id === project.id) || { changed: 0, branch: "unknown", changed_files: [] };
+  const workflows = (data.workflows || []).filter(item => item.project_id === project.id);
+  const workflowHistory = (data.workflow_history || []).filter(item => item.project_id === project.id);
 
   $("metric-agents").textContent = activeTasks.length;
   $("active-agent-count").textContent = activeTasks.length;
@@ -106,7 +117,7 @@ function render() {
   $("metric-changes").textContent = changes.changed;
   $("metric-branch").textContent = changes.branch || "branch unavailable";
 
-  $("agents").innerHTML = activeTasks.length ? activeTasks.map(taskCard).join("") : '<div class="row"><span>No active Agent tasks</span></div>';
+  $("agents").innerHTML = activeTasks.length ? activeTasks.map(taskCard).join("") : '<div class="row"><span>No active tasks</span></div>';
   $("history-count").textContent = historyTasks.length;
   $("agent-registry-path").textContent = data.agent_registry_path || "agents.json";
   $("agent-history-list").innerHTML = historyTasks.length ? historyTasks.map(taskCard).join("") : '<div class="row"><span>No terminal task history</span></div>';
@@ -117,29 +128,98 @@ function render() {
   $("changes").innerHTML = changes.unavailable ? `<div class="row"><span>${esc(changes.unavailable)}</span></div>` : changes.changed_files.length ? changes.changed_files.slice(0, 8).map(file => `<div class="row"><strong title="${esc(file)}">${esc(file)}</strong><span>changed</span></div>`).join("") : '<div class="row"><span>Working tree clean</span></div>';
   const capabilities = data.doctor.capabilities.filter(capability => capability.scope === "core" || capability.status === "unavailable").slice(0, 8);
   $("doctor").innerHTML = capabilities.map(capability => `<div class="row"><strong>${esc(capability.name)}</strong><span>${esc(capability.status)}</span></div>`).join("");
+  $("workflows").innerHTML = workflows.length ? workflows.map(workflow => `<button type="button" class="workflow-action" data-workflow-id="${esc(workflow.id)}" ${workflow.status === "available" ? "" : "disabled"}><strong>${esc(workflow.name)}</strong><span class="status ${esc(workflow.status)}">${esc(workflow.status)}</span><small>${esc(workflow.status === "available" ? `${workflow.description} · ${workflow.risk}` : workflow.reason)}</small></button>`).join("") : '<div class="row"><span>No workflow catalog entries</span></div>';
+  document.querySelectorAll("[data-workflow-id]").forEach(button => {
+    button.onclick = () => {
+      if (button.disabled) return;
+      const workflowId = button.dataset.workflowId;
+      const workflow = workflows.find(item => item.id === workflowId);
+      if (!window.confirm(`Run allowlisted workflow ${workflowId} for ${project.id}? Risk: ${workflow?.risk || "unknown"}.`)) return;
+      action({ action: "run_workflow", project_id: project.id, workflow_id: workflowId });
+    };
+  });
+  $("workflow-history").innerHTML = workflowHistory.length ? workflowHistory.slice(0, 8).map(run => `<div class="row"><strong>${esc(run.workflow_id)}</strong><span class="status ${esc(run.status)}">${esc(run.status)}</span><small>${esc(new Date(run.finished_at).toLocaleString())}${run.output_truncated ? " · output capped" : ""}</small></div>`).join("") : '<div class="row"><span>No workflow runs recorded</span></div>';
   renderTask();
 }
 
+function renderOverview(overview) {
+  const counts = overview.counts || {};
+  const attention = overview.attention || [];
+  const locations = overview.work_locations || [];
+  const tools = overview.tool_health || { available: false, capabilities: [], summary: {} };
+  $("overview-managed").textContent = counts.active_managed_tasks || 0;
+  $("overview-observed").textContent = counts.active_observed_tasks || 0;
+  $("overview-sessions").textContent = counts.tmux_sessions || 0;
+  $("overview-session-detail").textContent = `${counts.detached_sessions || 0} detached`;
+  $("overview-attention-count").textContent = `${attention.length} attention`;
+  $("overview-tool-health").textContent = tools.available ? (tools.summary?.unavailable_core ? "Review" : "Ready") : "Offline";
+  $("overview-tool-detail").textContent = tools.available ? `${tools.summary?.available || 0} available · ${tools.summary?.unavailable_optional || 0} optional missing` : (tools.reason || "binbox unavailable");
+  $("overview-attention").innerHTML = attention.length ? attention.slice(0, 8).map(item => `<div class="row attention-row"><strong>${esc(item.title)}</strong><span class="status ${esc(item.severity)}">${esc(item.kind)}</span><small>${esc(item.reason)}</small></div>`).join("") : '<div class="row"><span>No verified attention items</span></div>';
+  $("overview-locations").innerHTML = locations.length ? locations.map(location => `<button type="button" class="row location-row" data-overview-task="${esc(location.task_id)}"><strong>${esc(location.kind)} · ${esc(location.project_id || "unregistered")}</strong><span>${location.can_jump ? "resumable" : "unavailable"}</span><small>${esc(location.session_name ? `${location.session_name}:${location.window_index} ${location.pane_id}` : location.path || location.task_id)}</small></button>`).join("") : '<div class="row"><span>No active work locations</span></div>';
+  document.querySelectorAll("[data-overview-task]").forEach(button => {
+    button.onclick = () => {
+      state.taskId = button.dataset.overviewTask;
+      renderTask();
+    };
+  });
+  if (!tools.available) {
+    $("overview-tools").innerHTML = `<div class="row"><strong>binbox</strong><span>unavailable</span><small>${esc(tools.reason || "health provider unavailable")}</small></div>`;
+    return;
+  }
+  const capabilities = tools.capabilities || [];
+  $("overview-tools").innerHTML = capabilities.length ? capabilities.map(tool => `<div class="row"><strong>${esc(tool.name)}</strong><span class="status ${esc(tool.status)}">${esc(tool.status)}</span><small>${esc(tool.status === "available" ? tool.description : tool.recovery || tool.reason)}</small></div>`).join("") : '<div class="row"><span>No tool capabilities reported</span></div>';
+}
+
+function renderUnregisteredTasks(tasks) {
+  const unregistered = tasks.filter(task => !task.project_id && isActiveTask(task));
+  $("unregistered-task-count").textContent = unregistered.length;
+  $("unregistered-tasks").innerHTML = unregistered.length ? unregistered.map(taskCard).join("") : '<div class="row"><span>None observed</span></div>';
+  bindTaskCards();
+}
+
+function renderTmux(tmux) {
+  const sessions = tmux.sessions || [];
+  $("tmux-session-count").textContent = sessions.length;
+  $("tmux-availability").textContent = tmux.available ? "Live read-only snapshot from tmux" : (tmux.reason || "tmux unavailable");
+  $("tmux-availability").classList.toggle("unavailable", !tmux.available);
+  if (!tmux.available) {
+    $("tmux-sessions").innerHTML = "";
+    return;
+  }
+  $("tmux-sessions").innerHTML = sessions.map(session => `<section class="session-card"><div class="session-head"><strong>${esc(session.name)}</strong><span>${session.attached ? "attached" : "detached"} · ${esc(session.id)}</span></div>${session.windows.map(window => `<div class="window-row"><span>${window.index}:${esc(window.name)} · ${esc(window.id)}</span>${window.panes.map(pane => `<button type="button" class="pane-jump" data-pane-id="${esc(pane.id)}" title="Jump to ${esc(pane.id)}"><strong>${esc(pane.current_command || "shell")}</strong><small>${esc(pane.id)} · ${esc(pane.current_path)}</small></button>`).join("")}</div>`).join("")}</section>`).join("") || '<div class="row"><span>No tmux sessions</span></div>';
+  document.querySelectorAll("[data-pane-id]").forEach(button => {
+    button.onclick = () => action({ action: "jump_pane", pane_id: button.dataset.paneId });
+  });
+}
+
 function renderTask() {
-  const task = state.snapshot?.agents.find(item => item.id === state.taskId);
+  const task = (state.snapshot?.tasks || state.snapshot?.agents || []).find(item => item.id === state.taskId);
   if (!task) state.taskId = null;
   $("task-empty").hidden = Boolean(task);
   $("task-detail").hidden = !task;
   if (!task) return;
 
-  $("task-kind").textContent = task.agent_kind[0];
+  const kind = task.kind || task.agent_kind || "task";
+  const lifecycle = task.lifecycle || task.state || "unknown";
+  const provenance = task.provenance || "managed";
+  $("task-kind").textContent = kind[0];
   $("task-id").textContent = task.id;
-  $("task-state").textContent = task.state;
-  $("task-state").className = `status ${task.state}`;
-  const fields = [["Agent", task.agent_kind], ["Backend", task.backend], ["Project", task.project_id], ["Worktree", task.worktree_id || "main"], ["CWD", task.cwd], ["Updated", new Date(task.last_event_at).toLocaleString()]];
+  $("task-state").textContent = lifecycle;
+  $("task-state").className = `status ${lifecycle}`;
+  const location = task.runtime_location || {};
+  const managed = task.managed || task;
+  const updated = task.last_observed_at || managed.last_event_at;
+  const fields = [["Kind", kind], ["Provenance", provenance], ["Ownership", task.ownership || "managed"], ["Confidence", task.confidence || "authoritative"], ["Source", task.state_source || "registry"], ["Project", task.project_id || "unregistered"], ["Pane", location.pane_id || managed.backend_ref || "unavailable"], ["CWD", task.cwd], ["Exit result", task.exit_result || (task.exit_code == null ? "unknown" : `code ${task.exit_code}`)], ["Updated", updated ? new Date(updated).toLocaleString() : "unknown"]];
   $("task-fields").innerHTML = fields.map(([key, value]) => `<dt>${esc(key)}</dt><dd>${esc(value)}</dd>`).join("");
 
-  const active = isActiveTask(task);
-  $("task-terminal-note").hidden = active;
-  $("jump-task").disabled = !active;
-  $("stop-task").disabled = !active;
-  $("jump-task").title = active ? "Jump to the registered backend" : "Terminal task history cannot be opened";
-  $("stop-task").title = active ? "Stop the registered task" : "This task is already terminal";
+  const canJump = task.can_jump ?? isActiveTask(task);
+  const canStop = task.can_stop ?? isActiveTask(task);
+  $("task-terminal-note").hidden = canJump && canStop;
+  $("task-terminal-note").textContent = provenance === "observed" ? "Observed tasks are inferred from the current tmux snapshot. Jump is revalidated; Stop is unavailable." : task.state_source === "workflow_registry" && isActiveTask(task) ? "This Workbench-managed workflow runs in tmux. Jump is ownership-verified; Stop is intentionally performed in the terminal pane." : "This task is terminal history. Jump and Stop are unavailable.";
+  $("jump-task").disabled = !canJump;
+  $("stop-task").disabled = !canStop;
+  $("jump-task").title = canJump ? "Jump after revalidating the task location" : "This task location is unavailable";
+  $("stop-task").title = canStop ? "Stop the Workbench-managed task" : "Workbench does not own this task";
 }
 
 document.querySelectorAll("[data-action]").forEach(button => {
@@ -154,13 +234,13 @@ document.querySelectorAll("[data-action]").forEach(button => {
 document.querySelectorAll("[data-task-action]").forEach(button => {
   button.onclick = () => {
     if (!state.taskId || button.disabled) return;
-    if (button.dataset.taskAction === "stop_agent" && !window.confirm(`Stop registered task ${state.taskId}?`)) return;
+    if (button.dataset.taskAction === "stop_task" && !window.confirm(`Stop managed task ${state.taskId}?`)) return;
     action({ action: button.dataset.taskAction, task_id: state.taskId });
   };
 });
 
 $("clear-agent-history").onclick = () => {
-  const projectTasks = state.snapshot?.agents.filter(task => task.project_id === state.projectId && !isActiveTask(task)) || [];
+  const projectTasks = (state.snapshot?.tasks || state.snapshot?.agents || []).filter(task => task.project_id === state.projectId && task.provenance !== "observed" && !isActiveTask(task));
   if (!state.projectId || projectTasks.length === 0) return;
   if (!window.confirm(`Clear ${projectTasks.length} terminal task records for ${state.projectId}? Active tasks will be preserved and the registry will be backed up.`)) return;
   state.taskId = null;
@@ -169,7 +249,7 @@ $("clear-agent-history").onclick = () => {
 
 $("refresh").onclick = load;
 $("doctor-details").onclick = () => {
-  const failures = state.snapshot.doctor.capabilities.filter(capability => capability.status !== "available").map(capability => `${capability.name}: ${capability.reason || capability.status}`).join("\n") || "All capabilities available";
+  const failures = (state.snapshot?.doctor?.capabilities || []).filter(capability => capability.status !== "available").map(capability => `${capability.name}: ${capability.reason || capability.status}`).join("\n") || "All capabilities available";
   notice(failures);
 };
 

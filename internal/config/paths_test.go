@@ -29,6 +29,9 @@ func TestResolvePathsUsesXDGDirectories(t *testing.T) {
 	if paths.AgentsFile != filepath.Join("/tmp/example-state", "workbench", "agents.json") {
 		t.Fatalf("unexpected agent registry path: %s", paths.AgentsFile)
 	}
+	if paths.WorkflowsFile != filepath.Join("/tmp/example-state", "workbench", "workflows.json") {
+		t.Fatalf("unexpected workflow history path: %s", paths.WorkflowsFile)
+	}
 	if paths.CompatibilityDir != filepath.Join("/tmp/example-state", "workbench", "compatibility") {
 		t.Fatalf("unexpected compatibility state path: %s", paths.CompatibilityDir)
 	}

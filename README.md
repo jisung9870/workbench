@@ -1,7 +1,8 @@
 # workbench
 
-`wb` is the headless control plane for project, session, worktree, and agent
-state shared by the dev environment clients.
+`wb` is the headless control plane for project, worktree, and Agent state plus
+backend-aware project launch shared by the dev environment clients. A common
+session lifecycle remains a later slice.
 
 ## Baseline
 
@@ -37,6 +38,7 @@ wb agents start <project-id> --agent codex|claude [--worktree <id>] [--backend <
 wb agents jump <task-id>
 wb agents stop <task-id>
 wb compatibility observe --client <client> --feature <feature> --source <source>
+wb overview [--json]
 wb doctor [--profile <name>] [--json] [--strict]
 wb dashboard [--open auto|cmux|browser|none] [--port <0-65535>]
 wb config validate
@@ -234,6 +236,9 @@ wb agents start alpha --agent claude --worktree wt-alpha-feature-api-1a2b3c4d
 wb agents list --project alpha --json
 wb agents jump task-19c...
 wb agents stop task-19c...
+wb tasks list --project alpha --json
+wb tasks show tmux:%12 --json
+wb tasks jump tmux:%12
 ```
 
 Agent lifecycle records are stored in
@@ -243,6 +248,13 @@ the resolved path, separates active tasks from terminal history, and can clear
 only the exact selected-project terminal records shown at confirmation time.
 The previous registry is preserved under the Workbench `backups/` directory,
 and the Dashboard success notice reports the recovery path.
+
+`wb tasks` and the Dashboard add a snapshot-only projection of direct `codex`,
+`claude`, `omc`, and `omx` foreground commands reported by tmux. These records
+are labeled `observed` and `unmanaged`, expose their evidence and confidence,
+and can only jump after the pane is observed again. They are never added to the
+Agent registry and cannot be stopped by Workbench. See
+[docs/tasks.md](docs/tasks.md) for the unified Task contract.
 
 Tmux panes carry an exact `@workbench_task_id`, which is reread before jump or
 stop. A cmux task owns a newly created workspace and its reference must still
@@ -284,6 +296,42 @@ cmux is `disabled/skipped` outside macOS. Windows Terminal is
 does not become an optional warning or strict-mode failure. See
 [docs/doctor.md](docs/doctor.md) for the schema and recovery contract.
 
+## Operations overview
+
+`wb overview` provides the same read-only operational summary used by the
+Dashboard. It reports active managed and observed Tasks, attached and detached
+tmux sessions, verified worktree and project attention, resumable work
+locations, and normalized binbox tool health.
+
+```bash
+wb overview
+wb overview --json
+```
+
+## Typed workflows
+
+Workbench can run a deliberately small allowlist of project tests, repository
+security scans, and Terraform plans. The project path always comes from the
+registry and each workflow resolves to a fixed executable plus argument array;
+there is no arbitrary command runner.
+
+```bash
+wb workflows catalog --project setup
+wb workflows run project.test --project setup
+wb workflows history --project setup
+```
+
+The Dashboard exposes the same catalog with confirmation and recent bounded
+results. Runs start in a project tmux window, return immediately as managed
+Tasks, and finish independently of the Dashboard request. Apply, destroy, secret plaintext, arbitrary paths/arguments, and force
+operations are not available. See [docs/workflows.md](docs/workflows.md).
+
+Tool health is sourced only from the official `bb doctor --json` schema-v1
+contract. Executable paths from that response are deliberately omitted. A
+missing `bb`, command failure, or incompatible response is represented as an
+optional unavailable provider; it does not fail the Workbench overview or
+Dashboard snapshot.
+
 ## Local Dashboard
 
 `wb dashboard` serves an embedded responsive UI and versioned API on an
@@ -297,9 +345,12 @@ wb dashboard --open cmux
 wb dashboard --open none --port 0
 ```
 
-The Dashboard shows registered projects and Agent tasks, linked worktrees, Git
-change summaries, and Doctor capabilities. Mutations are limited to typed
-project-open and Agent start/jump/stop actions. Cross-origin requests and action
+The Dashboard opens with an operations overview of active managed/observed
+Tasks, tmux sessions, evidence-backed attention, resumable work locations, and
+binbox tool health. It also shows registered projects, linked worktrees, Git
+change summaries, Doctor capabilities, applicable typed workflows, and recent
+workflow results. Mutations are limited to typed project-open, Agent
+start/jump/stop, and allowlisted workflow actions. Cross-origin requests and action
 requests without the per-process token are rejected; no arbitrary shell command
 field is exposed.
 

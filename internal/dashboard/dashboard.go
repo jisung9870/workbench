@@ -18,10 +18,15 @@ import (
 	"strings"
 	"time"
 
+	binboxadapter "github.com/jisung9870/workbench/adapters/binbox"
+	tmuxadapter "github.com/jisung9870/workbench/adapters/tmux"
 	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/doctor"
 	"github.com/jisung9870/workbench/internal/output"
+	"github.com/jisung9870/workbench/internal/overview"
 	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/tasks"
+	"github.com/jisung9870/workbench/internal/workflows"
 	"github.com/jisung9870/workbench/internal/worktrees"
 )
 
@@ -30,45 +35,65 @@ var assets embed.FS
 
 const maxActionBody = 16 << 10
 
-type ChangeSummary struct {
-	ProjectID    string   `json:"project_id"`
-	Branch       string   `json:"branch"`
-	Dirty        bool     `json:"dirty"`
-	Changed      int      `json:"changed"`
-	ChangedFiles []string `json:"changed_files"`
-	Unavailable  string   `json:"unavailable,omitempty"`
-}
+type ChangeSummary = overview.ChangeSummary
 
 type AgentTask struct {
 	agents.Task
 	Lifecycle string `json:"lifecycle"`
 }
 
+type WorkflowRun struct {
+	ID              string           `json:"id"`
+	WorkflowID      string           `json:"workflow_id"`
+	ProjectID       string           `json:"project_id"`
+	Status          workflows.Status `json:"status"`
+	ExitCode        *int             `json:"exit_code,omitempty"`
+	StartedAt       time.Time        `json:"started_at"`
+	FinishedAt      time.Time        `json:"finished_at"`
+	DurationMillis  int64            `json:"duration_millis"`
+	OutputTruncated bool             `json:"output_truncated"`
+	PaneID          string           `json:"pane_id,omitempty"`
+	SessionName     string           `json:"session_name,omitempty"`
+}
+
+func SafeWorkflowRun(result workflows.Result) WorkflowRun {
+	return WorkflowRun{ID: result.ID, WorkflowID: result.WorkflowID, ProjectID: result.ProjectID, Status: result.Status, ExitCode: result.ExitCode, StartedAt: result.StartedAt, FinishedAt: result.FinishedAt, DurationMillis: result.DurationMillis, OutputTruncated: result.OutputTruncated, PaneID: result.PaneID, SessionName: result.SessionName}
+}
+
 type Snapshot struct {
-	GeneratedAt       time.Time          `json:"generated_at"`
-	Platform          string             `json:"platform"`
-	Profile           string             `json:"profile"`
-	AgentRegistryPath string             `json:"agent_registry_path"`
-	Projects          []projects.Project `json:"projects"`
-	Agents            []AgentTask        `json:"agents"`
-	Worktrees         []worktrees.Item   `json:"worktrees"`
-	Changes           []ChangeSummary    `json:"changes"`
-	Doctor            doctor.Report      `json:"doctor"`
-	Warnings          []string           `json:"warnings"`
+	GeneratedAt       time.Time                `json:"generated_at"`
+	Platform          string                   `json:"platform"`
+	Profile           string                   `json:"profile"`
+	AgentRegistryPath string                   `json:"agent_registry_path"`
+	Projects          []projects.Project       `json:"projects"`
+	Agents            []AgentTask              `json:"agents"`
+	Tasks             []tasks.Task             `json:"tasks"`
+	Worktrees         []worktrees.Item         `json:"worktrees"`
+	Changes           []ChangeSummary          `json:"changes"`
+	Doctor            doctor.Report            `json:"doctor"`
+	Warnings          []string                 `json:"warnings"`
+	Tmux              tmuxadapter.Snapshot     `json:"tmux"`
+	Overview          overview.Summary         `json:"overview"`
+	ToolHealth        binboxadapter.Report     `json:"tool_health"`
+	Workflows         []workflows.Availability `json:"workflows"`
+	WorkflowHistory   []WorkflowRun            `json:"workflow_history"`
 }
 
 type ActionRequest struct {
-	Action    string   `json:"action"`
-	ProjectID string   `json:"project_id,omitempty"`
-	TaskID    string   `json:"task_id,omitempty"`
-	TaskIDs   []string `json:"task_ids,omitempty"`
-	AgentKind string   `json:"agent_kind,omitempty"`
-	Backend   string   `json:"backend,omitempty"`
+	Action     string   `json:"action"`
+	ProjectID  string   `json:"project_id,omitempty"`
+	TaskID     string   `json:"task_id,omitempty"`
+	TaskIDs    []string `json:"task_ids,omitempty"`
+	AgentKind  string   `json:"agent_kind,omitempty"`
+	Backend    string   `json:"backend,omitempty"`
+	PaneID     string   `json:"pane_id,omitempty"`
+	WorkflowID string   `json:"workflow_id,omitempty"`
 }
 
 type ActionResult struct {
-	Message string `json:"message"`
-	Output  string `json:"output,omitempty"`
+	Message     string       `json:"message"`
+	Output      string       `json:"output,omitempty"`
+	WorkflowRun *WorkflowRun `json:"workflow_run,omitempty"`
 }
 
 type Service interface {

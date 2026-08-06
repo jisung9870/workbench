@@ -14,6 +14,7 @@ type Paths struct {
 	ProjectsFile     string
 	WorktreesFile    string
 	AgentsFile       string
+	WorkflowsFile    string
 	CompatibilityDir string
 	ProfilesDir      string
 	BackupsDir       string
@@ -71,6 +72,7 @@ func resolvePaths(goos, home, userConfig, userCache string, getenv func(string) 
 		ProjectsFile:     filepath.Join(configDir, "projects.toml"),
 		WorktreesFile:    filepath.Join(stateDir, "worktrees.json"),
 		AgentsFile:       filepath.Join(stateDir, "agents.json"),
+		WorkflowsFile:    filepath.Join(stateDir, "workflows.json"),
 		CompatibilityDir: filepath.Join(stateDir, "compatibility"),
 		ProfilesDir:      filepath.Join(configDir, "profiles"),
 		BackupsDir:       filepath.Join(stateDir, "backups"),

@@ -7,7 +7,7 @@ The embedded web surface has two product routes:
 
 | Route | Purpose |
 |---|---|
-| `/` | Operational Dashboard for projects, Agent tasks, worktrees, Git state, and Doctor |
+| `/` | Operational Dashboard for live tmux sessions, unified Tasks, projects, worktrees, Git state, and Doctor |
 | `/guide` | Searchable, offline product documentation shipped with the current binary |
 
 `/docs` is an alias for `/guide`. Both pages share the same System, Light, and
@@ -36,13 +36,31 @@ reachable address is not configurable.
 `GET /api/v1/snapshot` returns one schema-v1 Workbench envelope containing:
 
 - projects from the project store;
-- reconciled Agent task records;
+- a live, read-only tmux session/window/pane hierarchy using stable tmux IDs;
+- reconciled managed Agent records and snapshot-only observed tmux Tasks;
 - Git-verified linked worktrees;
 - per-project branch and porcelain change summaries;
-- the complete Doctor report and non-fatal collection warnings.
+- the complete Doctor report and non-fatal collection warnings;
+- an operations overview with typed counts, evidence-backed attention, active
+  work locations, and normalized `bb doctor --json` tool health.
 
-The browser refreshes this snapshot every 15 seconds and on demand. Project,
-Agent, worktree, change, and capability state stays read-only in the UI.
+The browser refreshes this snapshot every 15 seconds and on demand. Each Task
+keeps its provenance, ownership, confidence, evidence, and allowed actions.
+Observed Tasks are projected from the current tmux foreground command and are
+never written to the Agent registry. Their exit result is `unknown`; Workbench
+does not infer success or failure after the command disappears.
+
+The overview labels a tmux session detached only when tmux reports no attached
+clients. Worktrees become stale attention only from Git's `prunable` state or a
+verified managed-registry drift. Missing project paths and unavailable core
+state come from Doctor capabilities. No age threshold or browser-side guess is
+used. Active work locations preserve whether the underlying Task can currently
+jump.
+
+Binbox health is optional. The server invokes only the fixed argument array
+`bb doctor --json`, accepts its schema-v1 capability contract, and strips the
+reported executable paths. Missing, failed, or malformed providers remain
+visible as unavailable health while the snapshot itself succeeds.
 
 ## Appearance
 
@@ -91,14 +109,24 @@ for narrow screens, and print styles remove the navigation chrome.
 | `start_agent` | `project_id`, `agent_kind`, optional `backend` | detached tmux/cmux/Windows Terminal runtime |
 | `jump_agent` | `task_id` | registered active task only |
 | `stop_agent` | `task_id` | registered ownership revalidation; UI confirmation |
+| `jump_task` | `task_id` | managed Task or currently re-observed `tmux:%<pane>` Task |
+| `stop_task` | `task_id` | managed Task only; observed Tasks return `TASK_UNMANAGED` |
 | `clear_agent_history` | `project_id`, exact `task_ids` | confirmed terminal records only; stale-set rejection, cross-process lock, and registry backup |
+| `jump_pane` | `pane_id` | stable `%<number>` tmux pane ID only; switches the client that launched Dashboard |
+| `run_workflow` | `project_id`, `workflow_id` | compiled allowlist only; canonical registry path and fixed executable/argv |
 
 Shell-backed project open and Agent launch are refused because an interactive
 child would block the Dashboard request and has no browser attachment target.
-There is no arbitrary command, path, prompt, test command, or force-delete
+The tmux observer never creates sessions or writes a parallel registry. A missing
+tmux executable or server is reported as optional unavailable snapshot data. A
+Dashboard pane jump is refused when the Dashboard process is not running inside
+tmux; use `wb sessions jump <pane-id>` from a terminal to attach instead.
+There is no arbitrary command, path, prompt, argument, environment, or force-delete
 field. Terminal Agent records are separated from active tasks and cannot invoke
-Jump or Stop. The initial Run tests control is disabled until a registered
-workflow contract exists.
+Jump or Stop. Observed Tasks can Jump only after a fresh tmux snapshot and
+stable-pane verification; Stop is visibly unavailable. Project workflows are
+limited to the catalog documented in [workflows.md](workflows.md), confirmed in
+the UI, and recorded in bounded local history.
 
 ## Browser security
 
@@ -121,6 +149,6 @@ Handler tests cover the versioned envelope, action token and origin checks,
 unknown-field rejection, Dashboard/Guide routes and embedded assets, loopback
 binding, and listener shutdown. Node tests exercise theme defaulting,
 persistence, invalid values, and unavailable localStorage. Fake executors verify
-browser/cmux command arrays and Git status arguments. The UI JavaScript is
+browser/cmux command arrays, tmux snapshot parsing and stable-ID jumps, and Git status arguments. The UI JavaScript is
 syntax-checked without starting a browser, and the release verification includes
 a browser smoke for theme switching, Guide search, and responsive navigation.

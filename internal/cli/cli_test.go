@@ -53,6 +53,82 @@ func TestProjectsJSONEnvelopeAndInvalidArgument(t *testing.T) {
 	}
 }
 
+func TestWorkflowCatalogJSONAndDisallowedID(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	projectDir := filepath.Join(root, "alpha")
+	if err := os.Mkdir(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"projects", "add", projectDir, "--id", "alpha"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("add failed: %s", stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"workflows", "catalog", "--project", "alpha", "--json"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("catalog failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var envelope output.Envelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || !envelope.OK || envelope.SchemaVersion != 1 || !strings.Contains(stdout.String(), `"workflows"`) {
+		t.Fatalf("unexpected workflow envelope: %#v err=%v output=%s", envelope, err, stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"workflows", "run", "shell", "--project", "alpha", "--json"}, &stdout, &stderr); code != ExitArgument {
+		t.Fatalf("disallowed workflow exit=%d output=%s", code, stdout.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || envelope.OK || envelope.Error == nil || envelope.Error.Code != "INVALID_ARGUMENT" {
+		t.Fatalf("unexpected disallowed envelope: %#v err=%v", envelope, err)
+	}
+}
+
+func TestSessionsJSONTreatsMissingTmuxAsOptionalUnavailable(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	if err := runSessions([]string{"list", "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("optional tmux observation failed: %v", err)
+	}
+	var envelope output.Envelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("sessions output is not JSON: %v (%s)", err, stdout.String())
+	}
+	if !envelope.OK || !strings.Contains(stdout.String(), `"available":false`) || !strings.Contains(stdout.String(), "tmux executable was not found") || stderr.Len() != 0 {
+		t.Fatalf("unexpected optional-unavailable envelope: %s stderr=%s", stdout.String(), stderr.String())
+	}
+}
+
+func TestOverviewJSONSucceedsWhenTmuxAndBinboxAreUnavailable(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	t.Setenv("PATH", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"overview", "--json"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("optional providers failed overview: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var envelope output.Envelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || !envelope.OK {
+		t.Fatalf("overview output is not a successful envelope: %#v err=%v output=%s", envelope, err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"tool_health":{"provider":"binbox","available":false`) || !strings.Contains(stdout.String(), `"tmux:unavailable"`) {
+		t.Fatalf("optional-unavailable state is missing: %s", stdout.String())
+	}
+}
+
+func TestTasksStopRefusesObservedOwnership(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := runTasks([]string{"stop", "tmux:%12"}, config.Paths{}, &stdout, &stderr)
+	if err == nil || err.ExitCode != ExitConflict || err.Code != "TASK_UNMANAGED" {
+		t.Fatalf("observed task stop was not refused: %#v", err)
+	}
+}
+
 func TestOpenExplicitUnavailableUsesExitThree(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("cmux may be available on macOS")

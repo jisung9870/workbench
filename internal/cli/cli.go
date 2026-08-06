@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	cmuxadapter "github.com/jisung9870/workbench/adapters/cmux"
@@ -25,6 +27,8 @@ import (
 	"github.com/jisung9870/workbench/internal/migrate"
 	"github.com/jisung9870/workbench/internal/output"
 	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/tasks"
+	"github.com/jisung9870/workbench/internal/workflows"
 	"github.com/jisung9870/workbench/internal/worktrees"
 )
 
@@ -71,6 +75,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		commandErr = runWorktrees(args[1:], paths, stdout, stderr)
 	case "agents":
 		commandErr = runAgents(args[1:], paths, stdout, stderr)
+	case "tasks":
+		commandErr = runTasks(args[1:], paths, stdout, stderr)
+	case "sessions":
+		commandErr = runSessions(args[1:], stdout, stderr)
+	case "overview":
+		commandErr = runOverview(args[1:], paths, stdout, stderr)
+	case "workflows":
+		commandErr = runWorkflows(args[1:], paths, stdout)
 	case "compatibility":
 		commandErr = runCompatibility(args[1:], paths, stdout)
 	case "doctor":
@@ -87,6 +99,360 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return report(stdout, stderr, jsonMode, commandErr)
 	}
 	return ExitOK
+}
+
+func runWorkflows(args []string, paths config.Paths, stdout io.Writer) *commandError {
+	if len(args) == 0 {
+		return invalid("workflows subcommand is required")
+	}
+	manager := workflows.New(paths)
+	switch args[0] {
+	case "catalog", "list":
+		positionals, options, err := parseOptions(args[1:], map[string]bool{"--project": true, "--json": false})
+		if err != nil || len(positionals) != 0 {
+			return invalid("usage: wb workflows catalog [--project <id>] [--json]")
+		}
+		items, catalogErr := manager.Catalog(context.Background(), options["--project"])
+		if catalogErr != nil {
+			return workflowError(catalogErr)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"workflows": items}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		for _, item := range items {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", item.ID, item.Status, item.Risk, item.Reason)
+		}
+		return nil
+	case "run":
+		positionals, options, err := parseOptions(args[1:], map[string]bool{"--project": true, "--json": false})
+		if err != nil || len(positionals) != 1 || options["--project"] == "" {
+			return invalid("usage: wb workflows run <workflow-id> --project <id> [--json]")
+		}
+		result, backup, runErr := manager.Launch(context.Background(), positionals[0], options["--project"])
+		if runErr != nil {
+			return workflowError(runErr)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"workflow_run": result}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%s\texit=%v\n", result.ID, result.WorkflowID, result.Status, result.ExitCode)
+		if backup != "" {
+			fmt.Fprintf(stdout, "backup %s\n", backup)
+		}
+		return nil
+	case "worker":
+		if len(args) != 2 || strings.HasPrefix(args[1], "-") {
+			return invalid("usage: wb workflows worker <run-id>")
+		}
+		workerCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		result, _, workerErr := manager.Worker(workerCtx, args[1])
+		if workerErr != nil {
+			return workflowError(workerErr)
+		}
+		if result.Status != workflows.Succeeded {
+			return &commandError{ExitCode: ExitGeneral, Code: "WORKFLOW_FAILED", Message: fmt.Sprintf("workflow %s finished with status %s", result.WorkflowID, result.Status)}
+		}
+		return nil
+	case "history":
+		positionals, options, err := parseOptions(args[1:], map[string]bool{"--project": true, "--json": false})
+		if err != nil || len(positionals) != 0 {
+			return invalid("usage: wb workflows history [--project <id>] [--json]")
+		}
+		items, historyErr := manager.History(options["--project"])
+		if historyErr != nil {
+			return generalError(historyErr)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"workflow_runs": items}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		for _, item := range items {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", item.ID, item.ProjectID, item.WorkflowID, item.Status)
+		}
+		return nil
+	case "show":
+		positionals, options, err := parseOptions(args[1:], map[string]bool{"--json": false})
+		if err != nil || len(positionals) != 1 {
+			return invalid("usage: wb workflows show <run-id> [--json]")
+		}
+		item, found, showErr := manager.Show(positionals[0])
+		if showErr != nil {
+			return generalError(showErr)
+		}
+		if !found {
+			return &commandError{ExitCode: ExitUnavailable, Code: "WORKFLOW_RUN_NOT_FOUND", Message: fmt.Sprintf("workflow run %q was not found", positionals[0])}
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"workflow_run": item}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "id: %s\nworkflow_id: %s\nproject_id: %s\nstatus: %s\nstarted_at: %s\nfinished_at: %s\n", item.ID, item.WorkflowID, item.ProjectID, item.Status, item.StartedAt.Format(time.RFC3339), item.FinishedAt.Format(time.RFC3339))
+		if item.Output != "" {
+			fmt.Fprint(stdout, item.Output)
+		}
+		return nil
+	default:
+		return invalid("unknown workflows subcommand %q", args[0])
+	}
+}
+
+func workflowError(err error) *commandError {
+	var invalidErr *workflows.InvalidError
+	if errors.As(err, &invalidErr) {
+		return invalid("%s", err)
+	}
+	var notFound *workflows.NotFoundError
+	if errors.As(err, &notFound) {
+		return &commandError{ExitCode: ExitUnavailable, Code: "PROJECT_NOT_FOUND", Message: err.Error()}
+	}
+	var unavailable *workflows.UnavailableError
+	if errors.As(err, &unavailable) {
+		return &commandError{ExitCode: ExitUnavailable, Code: "WORKFLOW_UNAVAILABLE", Message: err.Error()}
+	}
+	var partial *workflows.PartialError
+	if errors.As(err, &partial) {
+		return &commandError{ExitCode: ExitPartial, Code: "PARTIAL_RESULT", Message: err.Error(), Details: map[string]any{"workflow_run": partial.Result, "backup": partial.Backup}}
+	}
+	var conflict *workflows.ConflictError
+	if errors.As(err, &conflict) {
+		return &commandError{ExitCode: ExitConflict, Code: "WORKFLOW_CONFLICT", Message: err.Error()}
+	}
+	return generalError(err)
+}
+
+func runOverview(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
+	positionals, options, parseErr := parseOptions(args, map[string]bool{"--json": false})
+	if parseErr != nil || len(positionals) != 0 {
+		return invalid("usage: wb overview [--json]")
+	}
+	snapshot, err := (&dashboardService{paths: paths}).Snapshot(context.Background())
+	if err != nil {
+		return generalError(err)
+	}
+	if _, jsonMode := options["--json"]; jsonMode {
+		if err := output.Write(stdout, map[string]any{"overview": snapshot.Overview}, snapshot.Warnings); err != nil {
+			return generalError(err)
+		}
+		return nil
+	}
+	for _, warning := range snapshot.Warnings {
+		fmt.Fprintf(stderr, "warning: %s\n", warning)
+	}
+	counts := snapshot.Overview.Counts
+	fmt.Fprintf(stdout, "projects: %d\ntmux sessions: %d (%d attached, %d detached)\nactive tasks: %d managed, %d observed\nworktrees: %d (%d dirty)\nattention: %d\nbinbox health: %s\n",
+		counts.Projects, counts.TmuxSessions, counts.AttachedSessions, counts.DetachedSessions,
+		counts.ActiveManagedTasks, counts.ActiveObservedTasks, counts.Worktrees, counts.DirtyWorktrees,
+		len(snapshot.Overview.Attention), availability(snapshot.Overview.ToolHealth.Available))
+	for _, item := range snapshot.Overview.Attention {
+		fmt.Fprintf(stdout, "- [%s] %s: %s\n", item.Severity, item.Title, item.Reason)
+	}
+	return nil
+}
+
+func availability(available bool) string {
+	if available {
+		return "available"
+	}
+	return "unavailable"
+}
+
+func runTasks(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
+	if len(args) == 0 {
+		return invalid("tasks subcommand is required")
+	}
+	ctx := context.Background()
+	executor := &backend.OSExecutor{Stdin: os.Stdin, Stdout: stdout, Stderr: stderr}
+	observer := tmuxadapter.New(executor, os.Getenv)
+	list := func(projectID string) ([]tasks.Task, []string, error) {
+		projectItems, err := projects.NewStore(paths).List()
+		if err != nil {
+			return nil, nil, err
+		}
+		managed, warnings, err := newAgentManager(paths, stdout, stderr).List(ctx, "")
+		if err != nil {
+			return nil, warnings, err
+		}
+		snapshot := observer.Snapshot(ctx)
+		if !snapshot.Available {
+			warnings = append(warnings, snapshot.Reason)
+		}
+		workflowRuns, workflowErr := workflows.New(paths).History("")
+		if workflowErr != nil {
+			warnings = append(warnings, fmt.Sprintf("workflow history: %v", workflowErr))
+			workflowRuns = []workflows.Result{}
+		}
+		projected := tasks.ProjectWithWorkflows(managed, workflowRuns, snapshot, projectItems, time.Now().UTC())
+		if projectID == "" {
+			return projected, warnings, nil
+		}
+		filtered := make([]tasks.Task, 0, len(projected))
+		for _, task := range projected {
+			if task.ProjectID == projectID {
+				filtered = append(filtered, task)
+			}
+		}
+		return filtered, warnings, nil
+	}
+	switch args[0] {
+	case "list":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--project": true, "--json": false})
+		if parseErr != nil || len(positionals) != 0 {
+			return invalid("usage: wb tasks list [--project <id>] [--json]")
+		}
+		items, warnings, err := list(options["--project"])
+		if err != nil {
+			return generalError(err)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"tasks": items}, warnings); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		for _, warning := range warnings {
+			fmt.Fprintf(stderr, "warning: %s\n", warning)
+		}
+		for _, task := range items {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", task.ID, task.ProjectID, task.Kind, task.Provenance, task.Lifecycle, task.CWD)
+		}
+		return nil
+	case "show":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) != 1 {
+			return invalid("usage: wb tasks show <task-id> [--json]")
+		}
+		items, warnings, err := list("")
+		if err != nil {
+			return generalError(err)
+		}
+		task, found := tasks.Find(items, positionals[0])
+		if !found {
+			return &commandError{ExitCode: ExitUnavailable, Code: "TASK_UNAVAILABLE", Message: fmt.Sprintf("task %q is not present in the current view", positionals[0])}
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"task": task}, warnings); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "id: %s\nkind: %s\nprovenance: %s\nownership: %s\nconfidence: %s\nlifecycle: %s\nstate_source: %s\nproject_id: %s\ncwd: %s\nexit_result: %s\n", task.ID, task.Kind, task.Provenance, task.Ownership, task.Confidence, task.Lifecycle, task.StateSource, task.ProjectID, task.CWD, task.ExitResult)
+		return nil
+	case "jump":
+		if len(args) != 2 || strings.HasPrefix(args[1], "-") {
+			return invalid("usage: wb tasks jump <task-id>")
+		}
+		if strings.HasPrefix(args[1], "run-") {
+			if err := workflows.New(paths).Jump(ctx, args[1], true, os.Getenv); err != nil {
+				return workflowError(err)
+			}
+			fmt.Fprintf(stdout, "jumped to workflow task %s\n", args[1])
+			return nil
+		}
+		if strings.HasPrefix(args[1], "tmux:") {
+			items := tasks.Project(nil, observer.Snapshot(ctx), nil, time.Now().UTC())
+			task, found := tasks.Find(items, args[1])
+			if !found || !task.CanJump {
+				return &commandError{ExitCode: ExitUnavailable, Code: "TASK_UNAVAILABLE", Message: fmt.Sprintf("observed task %q is no longer present in tmux", args[1])}
+			}
+			if err := observer.Jump(ctx, task.RuntimeLocation.PaneID, true); err != nil {
+				return &commandError{ExitCode: ExitUnavailable, Code: "TMUX_PANE_UNAVAILABLE", Message: err.Error()}
+			}
+			fmt.Fprintf(stdout, "jumped to observed task %s\n", task.ID)
+			return nil
+		}
+		task, err := newAgentManager(paths, stdout, stderr).Jump(ctx, args[1])
+		if err != nil {
+			return agentError(err)
+		}
+		fmt.Fprintf(stdout, "jumped to %s with %s\n", task.ID, task.Backend)
+		return nil
+	case "stop":
+		if len(args) != 2 || strings.HasPrefix(args[1], "-") {
+			return invalid("usage: wb tasks stop <task-id>")
+		}
+		if strings.HasPrefix(args[1], "run-") {
+			return &commandError{ExitCode: ExitConflict, Code: "WORKFLOW_STOP_UNAVAILABLE", Message: "workflow tasks are Workbench-managed but must be stopped from their terminal pane"}
+		}
+		if strings.HasPrefix(args[1], "tmux:") {
+			return &commandError{ExitCode: ExitConflict, Code: "TASK_UNMANAGED", Message: "observed tmux tasks are unmanaged and cannot be stopped by Workbench"}
+		}
+		task, backups, err := newAgentManager(paths, stdout, stderr).Stop(ctx, args[1])
+		if err != nil {
+			return agentError(err)
+		}
+		fmt.Fprintf(stdout, "stopped %s with %s\n", task.ID, task.Backend)
+		for _, backup := range backups {
+			fmt.Fprintf(stdout, "backup %s\n", backup)
+		}
+		return nil
+	default:
+		return invalid("unknown tasks subcommand %q", args[0])
+	}
+}
+
+func runSessions(args []string, stdout, stderr io.Writer) *commandError {
+	if len(args) == 0 {
+		return invalid("sessions subcommand is required")
+	}
+	executor := &backend.OSExecutor{Stdin: os.Stdin, Stdout: stdout, Stderr: stderr}
+	observer := tmuxadapter.New(executor, os.Getenv)
+	switch args[0] {
+	case "list":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) != 0 {
+			return invalid("usage: wb sessions list [--json]")
+		}
+		snapshot := observer.Snapshot(context.Background())
+		warnings := []string{}
+		if !snapshot.Available {
+			warnings = append(warnings, snapshot.Reason)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"tmux": snapshot}, warnings); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		if !snapshot.Available {
+			fmt.Fprintf(stdout, "tmux unavailable: %s\n", snapshot.Reason)
+			return nil
+		}
+		for _, session := range snapshot.Sessions {
+			attached := "detached"
+			if session.Attached {
+				attached = "attached"
+			}
+			fmt.Fprintf(stdout, "%s\t%s\t%s\n", session.ID, session.Name, attached)
+			for _, window := range session.Windows {
+				for _, pane := range window.Panes {
+					fmt.Fprintf(stdout, "  %s\t%s:%d.%d\t%s\t%s\n", pane.ID, session.Name, window.Index, pane.Index, pane.CurrentCommand, pane.CurrentPath)
+				}
+			}
+		}
+		return nil
+	case "jump":
+		if len(args) != 2 || strings.HasPrefix(args[1], "-") {
+			return invalid("usage: wb sessions jump <pane-id>")
+		}
+		if err := observer.Jump(context.Background(), args[1], true); err != nil {
+			return &commandError{ExitCode: ExitUnavailable, Code: "TMUX_PANE_UNAVAILABLE", Message: err.Error()}
+		}
+		fmt.Fprintf(stdout, "jumped to tmux pane %s\n", args[1])
+		return nil
+	default:
+		return invalid("unknown sessions subcommand %q", args[0])
+	}
 }
 
 func runDoctor(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
@@ -777,6 +1143,17 @@ Usage:
   wb agents start <project-id> --agent codex|claude [--worktree <id>] [--backend <backend>]
   wb agents jump <task-id>
   wb agents stop <task-id>
+  wb tasks list [--project <id>] [--json]
+  wb tasks show <task-id> [--json]
+  wb tasks jump <task-id>
+  wb tasks stop <task-id>
+  wb sessions list [--json]
+  wb sessions jump <pane-id>
+  wb overview [--json]
+  wb workflows catalog [--project <id>] [--json]
+  wb workflows run <workflow-id> --project <id> [--json]
+  wb workflows history [--project <id>] [--json]
+  wb workflows show <run-id> [--json]
   wb compatibility observe --client <client> --feature <feature> --source <source>
   wb doctor [--profile <name>] [--json] [--strict]
   wb dashboard [--open auto|cmux|browser|none] [--port <0-65535>]

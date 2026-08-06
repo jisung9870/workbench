@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	binboxadapter "github.com/jisung9870/workbench/adapters/binbox"
 	cmuxadapter "github.com/jisung9870/workbench/adapters/cmux"
 	gitadapter "github.com/jisung9870/workbench/adapters/git"
 	shelladapter "github.com/jisung9870/workbench/adapters/shell"
@@ -25,12 +26,30 @@ import (
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/dashboard"
 	"github.com/jisung9870/workbench/internal/doctor"
+	"github.com/jisung9870/workbench/internal/overview"
 	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/tasks"
+	"github.com/jisung9870/workbench/internal/workflows"
 	"github.com/jisung9870/workbench/internal/worktrees"
 )
 
 type dashboardService struct {
-	paths config.Paths
+	paths     config.Paths
+	tmux      tmuxRuntime
+	executor  backend.Executor
+	workflows workflowRuntime
+}
+
+type workflowRuntime interface {
+	Catalog(context.Context, string) ([]workflows.Availability, error)
+	Launch(context.Context, string, string) (workflows.Result, string, error)
+	History(string) ([]workflows.Result, error)
+	Jump(context.Context, string, bool, func(string) string) error
+}
+
+type tmuxRuntime interface {
+	Snapshot(context.Context) tmuxadapter.Snapshot
+	Jump(context.Context, string, bool) error
 }
 
 func runDashboard(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
@@ -85,10 +104,13 @@ func runDashboard(args []string, paths config.Paths, stdout, stderr io.Writer) *
 }
 
 func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapshot, error) {
-	executor := &backend.OSExecutor{Stdout: io.Discard, Stderr: io.Discard}
+	generatedAt := time.Now().UTC()
+	executor := service.processExecutor()
 	environment := backend.CurrentEnvironment()
 	registry := dashboardBackendRegistry(executor, environment)
+	tmuxSnapshot := service.tmuxObserver(executor).Snapshot(ctx)
 	doctorReport := doctor.NewManager(service.paths, executor, environment, registry).Run(ctx, "")
+	toolHealth := binboxadapter.New(executor).Doctor(ctx)
 	projectStore := projects.NewStore(service.paths)
 	projectItems, err := projectStore.List()
 	if err != nil {
@@ -107,6 +129,13 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 		}
 		dashboardAgents = append(dashboardAgents, dashboard.AgentTask{Task: task, Lifecycle: lifecycle})
 	}
+	workflowManager := service.workflowManager()
+	workflowHistory, historyErr := workflowManager.History("")
+	if historyErr != nil {
+		warnings = append(warnings, fmt.Sprintf("workflow history: %v", historyErr))
+		workflowHistory = []workflows.Result{}
+	}
+	unifiedTasks := tasks.ProjectWithWorkflows(agentItems, workflowHistory, tmuxSnapshot, projectItems, generatedAt)
 	worktreeManager := worktrees.NewManager(projectStore, worktrees.NewStateStore(service.paths), gitadapter.New(executor))
 	worktreeItems := []worktrees.Item{}
 	changes := make([]dashboard.ChangeSummary, 0, len(projectItems))
@@ -120,19 +149,137 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 		changes = append(changes, projectChanges(ctx, executor, project))
 	}
 	sort.Strings(warnings)
+	overviewSummary := overview.Build(overview.Input{
+		Projects: projectItems, Tasks: unifiedTasks, Tmux: tmuxSnapshot, Worktrees: worktreeItems,
+		Changes: changes, Doctor: doctorReport, Tools: toolHealth,
+	})
+	workflowItems := []workflows.Availability{}
+	for _, project := range projectItems {
+		items, catalogErr := workflowManager.Catalog(ctx, project.ID)
+		if catalogErr != nil {
+			warnings = append(warnings, fmt.Sprintf("workflows for %s: %v", project.ID, catalogErr))
+			continue
+		}
+		workflowItems = append(workflowItems, items...)
+	}
+	safeWorkflowHistory := make([]dashboard.WorkflowRun, 0, len(workflowHistory))
+	for _, item := range workflowHistory {
+		safeWorkflowHistory = append(safeWorkflowHistory, dashboard.SafeWorkflowRun(item))
+	}
 	return dashboard.Snapshot{
-		GeneratedAt: time.Now().UTC(), Platform: doctorReport.Platform, Profile: doctorReport.Profile,
+		GeneratedAt: generatedAt, Platform: doctorReport.Platform, Profile: doctorReport.Profile,
 		AgentRegistryPath: service.paths.AgentsFile, Projects: projectItems, Agents: dashboardAgents, Worktrees: worktreeItems, Changes: changes,
 		Doctor: doctorReport, Warnings: warnings,
+		Tmux: tmuxSnapshot, Tasks: unifiedTasks, Overview: overviewSummary, ToolHealth: toolHealth,
+		Workflows: workflowItems, WorkflowHistory: safeWorkflowHistory,
 	}, nil
+}
+
+func (service *dashboardService) workflowManager() workflowRuntime {
+	if service.workflows != nil {
+		return service.workflows
+	}
+	return workflows.New(service.paths)
+}
+
+func (service *dashboardService) processExecutor() backend.Executor {
+	if service.executor != nil {
+		return service.executor
+	}
+	return &backend.OSExecutor{Stdout: io.Discard, Stderr: io.Discard}
+}
+
+func (service *dashboardService) tmuxObserver(executor backend.Executor) tmuxRuntime {
+	if service.tmux != nil {
+		return service.tmux
+	}
+	return tmuxadapter.New(executor, os.Getenv)
 }
 
 func (service *dashboardService) Execute(ctx context.Context, request dashboard.ActionRequest) (dashboard.ActionResult, error) {
 	switch request.Action {
+	case "run_workflow":
+		if request.ProjectID == "" || request.WorkflowID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" {
+			return dashboard.ActionResult{}, dashboardInvalid("run_workflow requires only project_id and workflow_id")
+		}
+		result, _, err := service.workflowManager().Launch(ctx, request.WorkflowID, request.ProjectID)
+		if err != nil {
+			var invalidErr *workflows.InvalidError
+			var unavailable *workflows.UnavailableError
+			var notFound *workflows.NotFoundError
+			var partial *workflows.PartialError
+			switch {
+			case errors.As(err, &invalidErr):
+				return dashboard.ActionResult{}, dashboardInvalid(err.Error())
+			case errors.As(err, &notFound):
+				return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusNotFound, Code: "PROJECT_NOT_FOUND", Message: err.Error()}
+			case errors.As(err, &unavailable):
+				return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusServiceUnavailable, Code: "WORKFLOW_UNAVAILABLE", Message: err.Error()}
+			case errors.As(err, &partial):
+				return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusInternalServerError, Code: "PARTIAL_RESULT", Message: err.Error(), Details: map[string]any{"workflow_run": partial.Result, "backup": partial.Backup}}
+			default:
+				return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusInternalServerError, Code: "WORKFLOW_FAILED", Message: err.Error()}
+			}
+		}
+		safeResult := dashboard.SafeWorkflowRun(result)
+		return dashboard.ActionResult{Message: fmt.Sprintf("workflow %s launched with status %s", result.WorkflowID, result.Status), WorkflowRun: &safeResult}, nil
+	case "jump_task":
+		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
+			return dashboard.ActionResult{}, dashboardInvalid("jump_task requires only task_id")
+		}
+		if strings.HasPrefix(request.TaskID, "run-") {
+			if err := service.workflowManager().Jump(ctx, request.TaskID, false, os.Getenv); err != nil {
+				return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusServiceUnavailable, Code: "WORKFLOW_TASK_UNAVAILABLE", Message: err.Error()}
+			}
+			return dashboard.ActionResult{Message: fmt.Sprintf("jumped to workflow task %s", request.TaskID)}, nil
+		}
+		if strings.HasPrefix(request.TaskID, "tmux:") {
+			paneID := strings.TrimPrefix(request.TaskID, "tmux:")
+			executor := &backend.OSExecutor{Stdout: io.Discard, Stderr: io.Discard}
+			snapshot := service.tmuxObserver(executor).Snapshot(ctx)
+			observed := tasks.Project(nil, snapshot, nil, time.Now().UTC())
+			task, found := tasks.Find(observed, request.TaskID)
+			if !found || !task.CanJump || task.RuntimeLocation.PaneID != paneID {
+				return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusServiceUnavailable, Code: "OBSERVED_TASK_UNAVAILABLE", Message: fmt.Sprintf("observed task %s is no longer present in tmux", request.TaskID)}
+			}
+			if err := service.tmuxObserver(executor).Jump(ctx, paneID, false); err != nil {
+				return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusServiceUnavailable, Code: "TMUX_PANE_UNAVAILABLE", Message: err.Error()}
+			}
+			return dashboard.ActionResult{Message: fmt.Sprintf("jumped to observed task %s", request.TaskID)}, nil
+		}
+		task, jumpErr := newAgentManager(service.paths, io.Discard, io.Discard).Jump(ctx, request.TaskID)
+		if jumpErr != nil {
+			return dashboard.ActionResult{}, dashboardCommandError(agentError(jumpErr))
+		}
+		return dashboard.ActionResult{Message: fmt.Sprintf("jumped to %s with %s", task.ID, task.Backend)}, nil
+	case "stop_task":
+		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
+			return dashboard.ActionResult{}, dashboardInvalid("stop_task requires only task_id")
+		}
+		if strings.HasPrefix(request.TaskID, "run-") {
+			return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusConflict, Code: "WORKFLOW_STOP_UNAVAILABLE", Message: "workflow tasks are Workbench-managed but must be stopped from their terminal pane"}
+		}
+		if strings.HasPrefix(request.TaskID, "tmux:") {
+			return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusConflict, Code: "TASK_UNMANAGED", Message: "observed tmux tasks are unmanaged and cannot be stopped by Workbench"}
+		}
+		task, _, stopErr := newAgentManager(service.paths, io.Discard, io.Discard).Stop(ctx, request.TaskID)
+		if stopErr != nil {
+			return dashboard.ActionResult{}, dashboardCommandError(agentError(stopErr))
+		}
+		return dashboard.ActionResult{Message: fmt.Sprintf("stopped task %s", task.ID)}, nil
+	case "jump_pane":
+		if request.PaneID == "" || request.ProjectID != "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.WorkflowID != "" {
+			return dashboard.ActionResult{}, dashboardInvalid("jump_pane requires only pane_id")
+		}
+		executor := &backend.OSExecutor{Stdout: io.Discard, Stderr: io.Discard}
+		if err := service.tmuxObserver(executor).Jump(ctx, request.PaneID, false); err != nil {
+			return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusServiceUnavailable, Code: "TMUX_PANE_UNAVAILABLE", Message: err.Error()}
+		}
+		return dashboard.ActionResult{Message: fmt.Sprintf("jumped to tmux pane %s", request.PaneID)}, nil
 	case "open_project":
 		return service.openProject(ctx, request)
 	case "start_agent":
-		if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind == "" {
+		if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind == "" || request.PaneID != "" || request.WorkflowID != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("start_agent requires project_id and agent_kind")
 		}
 		requested, err := service.agentBackend(ctx, request.ProjectID, request.Backend)
@@ -146,7 +293,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 		}
 		return dashboard.ActionResult{Message: fmt.Sprintf("started %s task %s", task.AgentKind, task.ID)}, nil
 	case "jump_agent":
-		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" {
+		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("jump_agent requires only task_id")
 		}
 		task, jumpErr := newAgentManager(service.paths, io.Discard, io.Discard).Jump(ctx, request.TaskID)
@@ -155,7 +302,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 		}
 		return dashboard.ActionResult{Message: fmt.Sprintf("jumped to %s with %s", task.ID, task.Backend)}, nil
 	case "stop_agent":
-		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" {
+		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("stop_agent requires only task_id")
 		}
 		task, _, stopErr := newAgentManager(service.paths, io.Discard, io.Discard).Stop(ctx, request.TaskID)
@@ -164,7 +311,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 		}
 		return dashboard.ActionResult{Message: fmt.Sprintf("stopped task %s", task.ID)}, nil
 	case "clear_agent_history":
-		if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) == 0 || request.AgentKind != "" || request.Backend != "" {
+		if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) == 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("clear_agent_history requires project_id and task_ids")
 		}
 		if _, found, projectErr := projects.NewStore(service.paths).Show(request.ProjectID); projectErr != nil {
@@ -183,7 +330,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 }
 
 func (service *dashboardService) openProject(ctx context.Context, request dashboard.ActionRequest) (dashboard.ActionResult, error) {
-	if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" {
+	if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.PaneID != "" || request.WorkflowID != "" {
 		return dashboard.ActionResult{}, dashboardInvalid("open_project requires project_id and optional backend")
 	}
 	project, found, err := projects.NewStore(service.paths).Show(request.ProjectID)
