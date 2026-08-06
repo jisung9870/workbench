@@ -1,0 +1,137 @@
+#compdef wb
+
+_wb_project_ids() {
+  local -a values
+  local line
+  for line in ${(f)"$(command wb projects list 2>/dev/null)"}; do
+    values+=("${line%%$'\t'*}")
+  done
+  _describe -t projects 'project ID' values
+}
+
+_wb_session_names() {
+  local -a values
+  local line
+  for line in ${(f)"$(command wb sessions list 2>/dev/null)"}; do
+    values+=("${line%%$'\t'*}")
+  done
+  _describe -t sessions 'tmux session' values
+}
+
+_wb_agent_ids() {
+  local -a values
+  local line
+  for line in ${(f)"$(command wb agents list 2>/dev/null)"}; do
+    values+=("${line%%$'\t'*}")
+  done
+  _describe -t agents 'Agent task ID' values
+}
+
+_wb() {
+  local -a commands subcommands
+  commands=(
+    'projects:Register and inspect projects'
+    'open:Open a project in a selected terminal backend'
+    'sessions:Inspect and control live tmux sessions'
+    'worktrees:Create and manage safe Git worktrees'
+    'agents:Start and control registered Agent tasks'
+    'server:Run the Dashboard as a background service'
+    'dashboard:Run the Dashboard in the foreground'
+    'doctor:Check configuration and runtime capabilities'
+    'config:Validate Workbench configuration'
+    'migrate:Import projects from legacy configuration'
+    'compatibility:Record legacy client compatibility use'
+    'completion:Generate shell completion scripts'
+    'help:Show help for a command'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe -t commands 'wb command' commands
+    return
+  fi
+
+  case "$words[2]" in
+    projects)
+      subcommands=(
+        'list:List registered projects'
+        'show:Show one project'
+        'add:Register a project directory'
+        'remove:Remove only the registry entry'
+      )
+      if (( CURRENT == 3 )); then _describe -t commands 'projects command' subcommands; return; fi
+      case "$words[3]" in
+        list) _arguments '1:command:(projects)' '2:command:(list)' '--json[Emit a schema-v1 JSON envelope]' '(-h --help)'{-h,--help}'[Show help]' ;;
+        show) _arguments '1:command:(projects)' '2:command:(show)' '3:project ID:_wb_project_ids' '--json[Emit a schema-v1 JSON envelope]' '(-h --help)'{-h,--help}'[Show help]' ;;
+        add) _arguments '1:command:(projects)' '2:command:(add)' '3:project directory:_directories' '--id=[Stable project ID]:project ID:' '--profile=[Assign a profile]:profile:' '(-h --help)'{-h,--help}'[Show help]' ;;
+        remove) _arguments '1:command:(projects)' '2:command:(remove)' '3:project ID:_wb_project_ids' '(-h --help)'{-h,--help}'[Show help]' ;;
+      esac
+      ;;
+    open)
+      _arguments '1:command:(open)' '2:project ID:_wb_project_ids' '--backend=[Select backend]:backend:(auto cmux windows-terminal tmux shell)' '--window=[Windows Terminal target]:target:(last new)' '--terminal-mode=[Windows Terminal mode]:mode:(tab split-auto split-horizontal split-vertical)' '(-h --help)'{-h,--help}'[Show help]'
+      ;;
+    sessions)
+      subcommands=('list:List live sessions and ownership' 'show:Show one live session' 'jump:Attach or switch to a session' 'adopt:Explicitly adopt a matching legacy session' 'stop:Stop a verified managed session')
+      if (( CURRENT == 3 )); then _describe -t commands 'sessions command' subcommands; return; fi
+      case "$words[3]" in
+        list) _arguments '1:command:(sessions)' '2:command:(list)' '--json[Emit a schema-v1 JSON envelope]' '(-h --help)'{-h,--help}'[Show help]' ;;
+        show) _arguments '1:command:(sessions)' '2:command:(show)' '3:session name:_wb_session_names' '--json[Emit a schema-v1 JSON envelope]' '(-h --help)'{-h,--help}'[Show help]' ;;
+        jump) _arguments '1:command:(sessions)' '2:command:(jump)' '3:session name:_wb_session_names' '(-h --help)'{-h,--help}'[Show help]' ;;
+        adopt|stop) _arguments '1:command:(sessions)' '2:command:((adopt stop))' '3:project ID:_wb_project_ids' '--json[Emit a schema-v1 JSON envelope]' '(-h --help)'{-h,--help}'[Show help]' ;;
+      esac
+      ;;
+    worktrees)
+      subcommands=('list:List project worktrees' 'create:Create a managed linked worktree' 'remove:Safely remove a managed worktree')
+      if (( CURRENT == 3 )); then _describe -t commands 'worktrees command' subcommands; return; fi
+      case "$words[3]" in
+        list) _arguments '1:command:(worktrees)' '2:command:(list)' '3:project ID:_wb_project_ids' '--json[Emit a schema-v1 JSON envelope]' '(-h --help)'{-h,--help}'[Show help]' ;;
+        create) _arguments '1:command:(worktrees)' '2:command:(create)' '3:project ID:_wb_project_ids' '4:branch:' '--base=[Base Git reference]:reference:' '(-h --help)'{-h,--help}'[Show help]' ;;
+        remove) _arguments '1:command:(worktrees)' '2:command:(remove)' '3:worktree ID:' '--delete-branch[Also safely delete the branch]' '(-h --help)'{-h,--help}'[Show help]' ;;
+      esac
+      ;;
+    agents)
+      subcommands=('list:List Agent tasks' 'show:Show one Agent task' 'start:Start a Codex or Claude task' 'jump:Jump to a verified active task' 'stop:Stop a verified active task')
+      if (( CURRENT == 3 )); then _describe -t commands 'agents command' subcommands; return; fi
+      case "$words[3]" in
+        list) _arguments '1:command:(agents)' '2:command:(list)' '--project=[Filter by project]:project ID:_wb_project_ids' '--json[Emit a schema-v1 JSON envelope]' '(-h --help)'{-h,--help}'[Show help]' ;;
+        show) _arguments '1:command:(agents)' '2:command:(show)' '3:task ID:_wb_agent_ids' '--json[Emit a schema-v1 JSON envelope]' '(-h --help)'{-h,--help}'[Show help]' ;;
+        start) _arguments '1:command:(agents)' '2:command:(start)' '3:project ID:_wb_project_ids' '--agent=[Agent kind]:kind:(codex claude)' '--worktree=[Managed worktree ID]:worktree ID:' '--backend=[Select backend]:backend:(auto cmux windows-terminal tmux shell)' '(-h --help)'{-h,--help}'[Show help]' ;;
+        jump|stop) _arguments '1:command:(agents)' '2:command:((jump stop))' '3:task ID:_wb_agent_ids' '(-h --help)'{-h,--help}'[Show help]' ;;
+      esac
+      ;;
+    server)
+      subcommands=('start:Start a managed background server' 'status:Inspect the managed server' 'stop:Gracefully stop the managed server')
+      if (( CURRENT == 3 )); then _describe -t commands 'server command' subcommands; return; fi
+      case "$words[3]" in
+        start) _arguments '1:command:(server)' '2:command:(start)' '--open=[Open target]:target:(auto cmux browser none)' '--port=[Loopback port]:port:' '--json[Emit a schema-v1 JSON envelope]' '(-h --help)'{-h,--help}'[Show help]' ;;
+        status|stop) _arguments '1:command:(server)' '2:command:((status stop))' '--json[Emit a schema-v1 JSON envelope]' '(-h --help)'{-h,--help}'[Show help]' ;;
+      esac
+      ;;
+    dashboard)
+      _arguments '1:command:(dashboard)' '--open=[Open target]:target:(auto cmux browser none)' '--port=[Loopback port]:port:' '(-h --help)'{-h,--help}'[Show help]'
+      ;;
+    doctor)
+      _arguments '1:command:(doctor)' '--profile=[Check a profile]:profile:' '--json[Emit a schema-v1 JSON envelope]' '--strict[Fail on optional capability misses]' '(-h --help)'{-h,--help}'[Show help]'
+      ;;
+    config)
+      if (( CURRENT == 3 )); then subcommands=('validate:Validate config, profile, and project registry'); _describe -t commands 'config command' subcommands; return; fi
+      _arguments '1:command:(config)' '2:command:(validate)' '(-h --help)'{-h,--help}'[Show help]'
+      ;;
+    migrate)
+      _arguments '1:command:(migrate)' '2::source type:(sessionizer)' '--check[Preview without writing]' '--apply[Apply the reviewed migration]' '--file=[Legacy source file]:file:_files' '--profile=[Assign a profile]:profile:' '(-h --help)'{-h,--help}'[Show help]'
+      ;;
+    compatibility)
+      if (( CURRENT == 3 )); then subcommands=('observe:Record an allowlisted observation'); _describe -t commands 'compatibility command' subcommands; return; fi
+      _arguments '1:command:(compatibility)' '2:command:(observe)' '--client=[Legacy client]:client:' '--feature=[Observed feature]:feature:' '--source=[Compatibility source]:source:' '(-h --help)'{-h,--help}'[Show help]'
+      ;;
+    completion)
+      if (( CURRENT == 3 )); then subcommands=('zsh:Generate zsh completion for wb'); _describe -t commands 'shell' subcommands; return; fi
+      _arguments '1:command:(completion)' '2:shell:(zsh)' '(-h --help)'{-h,--help}'[Show help]'
+      ;;
+    help)
+      _arguments '1:command:(help)' '2:command:->helpcommand' '*::subcommand:->helpsubcommand'
+      if [[ "$state" == helpcommand ]]; then _describe -t commands 'wb command' commands; fi
+      ;;
+  esac
+}
+
+_wb "$@"

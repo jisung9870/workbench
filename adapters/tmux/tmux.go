@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jisung9870/workbench/internal/backend"
-	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/sessions"
 )
 
 type Adapter struct {
@@ -37,30 +37,22 @@ func (adapter *Adapter) Detect(ctx context.Context, _ backend.OpenRequest) backe
 }
 
 func (adapter *Adapter) OpenProject(ctx context.Context, request backend.OpenRequest) (backend.OpenResult, error) {
-	path, err := projects.CanonicalPath(request.Project.Path)
-	if err != nil {
-		return adapter.result(request.Project.ID, backend.ProcessResult{}), err
+	if _, _, err := sessions.NewManager(adapter.executor, adapter.getenv).Ensure(ctx, request.Project); err != nil {
+		return adapter.result(request.Project.ID, backend.ProcessResult{}), fmt.Errorf("ensure tmux session: %w", err)
 	}
 	command, err := adapter.executor.LookPath("tmux")
 	if err != nil {
 		return adapter.result(request.Project.ID, backend.ProcessResult{}), err
 	}
-	target := "=" + request.Project.ID
+	target := "=" + request.Project.ID + ":"
 	if adapter.getenv != nil && adapter.getenv("TMUX") != "" {
-		_, hasErr := adapter.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"has-session", "-t", target}})
-		if hasErr != nil {
-			created, createErr := adapter.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"new-session", "-d", "-s", request.Project.ID, "-c", path}})
-			if createErr != nil {
-				return adapter.result(request.Project.ID, created), fmt.Errorf("create tmux session: %w", createErr)
-			}
-		}
 		switched, switchErr := adapter.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"switch-client", "-t", target}, Interactive: true})
 		if switchErr != nil {
 			return adapter.result(request.Project.ID, switched), fmt.Errorf("switch tmux client: %w", switchErr)
 		}
 		return adapter.result(request.Project.ID, switched), nil
 	}
-	opened, openErr := adapter.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"new-session", "-A", "-s", request.Project.ID, "-c", path}, Interactive: true})
+	opened, openErr := adapter.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"attach-session", "-t", target}, Interactive: true})
 	if openErr != nil {
 		return adapter.result(request.Project.ID, opened), fmt.Errorf("open tmux session: %w", openErr)
 	}
@@ -69,7 +61,7 @@ func (adapter *Adapter) OpenProject(ctx context.Context, request backend.OpenReq
 
 func (adapter *Adapter) result(projectID string, process backend.ProcessResult) backend.OpenResult {
 	return backend.OpenResult{
-		Backend: adapter.Name(), Reference: "tmux:" + projectID, Command: process.Command,
+		Backend: adapter.Name(), Session: adapter.Name(), Surface: adapter.Name(), Reference: "tmux:" + projectID, Command: process.Command,
 		ExitCode: process.ExitCode, Stdout: process.Stdout, Stderr: process.Stderr,
 	}
 }

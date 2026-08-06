@@ -15,6 +15,8 @@ Dark theme control.
 
 ## Start and stop
 
+Run the Dashboard in the foreground during interactive use or development:
+
 ```bash
 wb dashboard
 wb dashboard --open browser
@@ -26,6 +28,30 @@ The default `auto` target uses the cmux browser on macOS when cmux is available
 and otherwise asks the platform default browser to open the URL. An opener
 failure prints the loopback URL for manual use while the server remains active.
 `Ctrl-C` or `SIGTERM` shuts down the HTTP server and closes its listener.
+
+Run the same Dashboard as a managed background server when it must survive the
+launching terminal:
+
+```bash
+wb server start
+wb server start --open browser --port 0
+wb server status
+wb server status --json
+wb server stop
+```
+
+Background start defaults to `--open none` and an OS-assigned port. The selected
+URL is returned by `start` and `status`. Runtime metadata is stored in
+`${XDG_STATE_HOME:-~/.local/state}/workbench/server.json` on Unix/WSL or
+`%LOCALAPPDATA%\workbench\server.json` on native Windows. Server output is
+appended to the adjacent `server.log`.
+
+The state file is mode 0600 and contains a random instance ID and shutdown
+token. `status` requires the loopback management endpoint to match the recorded
+instance and PID. `stop` sends the private token to that endpoint and waits for
+graceful shutdown; it never kills a process based only on a possibly reused PID.
+An unreachable but still-live registered PID is reported as `unavailable`
+instead of being overwritten or killed.
 
 `--port 0` asks the operating system for an available port. A fixed port must be
 between 0 and 65535. Binding is always `127.0.0.1`; a wildcard or externally
@@ -87,14 +113,23 @@ for narrow screens, and print styles remove the navigation chrome.
 
 | Action | Required fields | Boundary |
 |---|---|---|
-| `open_project` | `project_id`, optional `backend` | cmux or Windows Terminal only; `auto` ignores interactive tmux/shell preferences |
+| `open_project` | `project_id`, optional `backend` | WSL can combine a tmux session with a Windows Terminal surface; shell remains interactive-only |
 | `start_agent` | `project_id`, `agent_kind`, optional `backend` | detached tmux/cmux/Windows Terminal runtime |
 | `jump_agent` | `task_id` | registered active task only |
 | `stop_agent` | `task_id` | registered ownership revalidation; UI confirmation |
 | `clear_agent_history` | `project_id`, exact `task_ids` | confirmed terminal records only; stale-set rejection, cross-process lock, and registry backup |
 
-Shell-backed project open and Agent launch are refused because an interactive
-child would block the Dashboard request and has no browser attachment target.
+On WSL, `auto` respects `prefer_current_tmux` as a session preference. The
+Dashboard process validates tmux and Windows Terminal availability and first
+ensures the exact project-ID session through the shared session manager. New
+sessions receive Workbench project ID/path ownership metadata; an existing legacy
+session is reused without implicit adoption, while incomplete or mismatched
+metadata is rejected. It then launches `wt.exe -> wsl.exe --exec tmux
+new-session -A` as an argument array. The server does not attach to tmux itself
+and never switches a client based on an inherited `TMUX` environment variable.
+Closing the Windows Terminal tab leaves the tmux session available for the next
+Open. Shell-backed project open is refused because
+an interactive child would block the Dashboard request and has no attachment target.
 There is no arbitrary command, path, prompt, test command, or force-delete
 field. Terminal Agent records are separated from active tasks and cannot invoke
 Jump or Stop. The initial Run tests control is disabled until a registered
@@ -111,6 +146,8 @@ workflow contract exists.
 - Guide, theme, CSS, and JavaScript assets are embedded in the binary and make
   no remote font, image, analytics, or other network requests;
 - project and task values are passed to backends as argument arrays.
+- background server shutdown requires a separate random token stored only in
+  the mode-0600 server state and sent to the loopback management endpoint.
 
 The token is runtime-only. It is never written to Workbench state, logs, or a
 committed asset.

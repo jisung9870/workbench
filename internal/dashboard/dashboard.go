@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jisung9870/workbench/internal/agents"
+	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/doctor"
 	"github.com/jisung9870/workbench/internal/output"
 	"github.com/jisung9870/workbench/internal/projects"
@@ -67,8 +68,10 @@ type ActionRequest struct {
 }
 
 type ActionResult struct {
-	Message string `json:"message"`
-	Output  string `json:"output,omitempty"`
+	Message string       `json:"message"`
+	Output  string       `json:"output,omitempty"`
+	Session backend.Name `json:"session,omitempty"`
+	Surface backend.Name `json:"surface,omitempty"`
 }
 
 type Service interface {

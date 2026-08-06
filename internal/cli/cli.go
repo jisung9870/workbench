@@ -48,14 +48,16 @@ type commandError struct {
 func (err *commandError) Error() string { return err.Message }
 
 func Run(args []string, stdout, stderr io.Writer) int {
+	if handled, code := handleHelp(args, stdout, stderr); handled {
+		return code
+	}
+	if handled, code := handleCompletion(args, stdout, stderr); handled {
+		return code
+	}
 	jsonMode := contains(args, "--json")
 	paths, err := config.ResolvePaths()
 	if err != nil {
 		return report(stdout, stderr, jsonMode, &commandError{ExitCode: ExitArgument, Code: "CONFIG_INVALID", Message: err.Error()})
-	}
-	if len(args) == 0 {
-		fmt.Fprint(stderr, usage())
-		return ExitArgument
 	}
 	var commandErr *commandError
 	switch args[0] {
@@ -65,6 +67,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		commandErr = runConfig(args[1:], paths, stdout)
 	case "migrate":
 		commandErr = runMigrate(args[1:], paths, stdout, stderr)
+	case "sessions":
+		commandErr = runSessions(args[1:], paths, stdout, stderr)
 	case "open":
 		commandErr = runOpen(args[1:], paths, stdout, stderr)
 	case "worktrees":
@@ -77,9 +81,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		commandErr = runDoctor(args[1:], paths, stdout, stderr)
 	case "dashboard":
 		commandErr = runDashboard(args[1:], paths, stdout, stderr)
-	case "help", "--help", "-h":
-		fmt.Fprint(stdout, usage())
-		return ExitOK
+	case "server":
+		commandErr = runServer(args[1:], paths, stdout, stderr)
 	default:
 		commandErr = invalid("unknown command %q", args[0])
 	}
@@ -758,29 +761,4 @@ func contains(values []string, target string) bool {
 func isConflict(err error) bool {
 	message := err.Error()
 	return strings.Contains(message, "duplicate project id") || strings.Contains(message, "already owned")
-}
-
-func usage() string {
-	return `wb - local workbench control plane
-
-Usage:
-  wb projects list [--json]
-  wb projects show <id> [--json]
-  wb projects add <path> [--id <id>] [--profile <profile>]
-  wb projects remove <id>
-  wb open <project-id> [--backend <backend>] [--window <last|new|id>] [--terminal-mode <tab|split-auto|split-horizontal|split-vertical>]
-  wb worktrees list <project-id> [--json]
-  wb worktrees create <project-id> <branch> [--base <ref>]
-  wb worktrees remove <worktree-id> [--delete-branch]
-  wb agents list [--project <id>] [--json]
-  wb agents show <task-id> [--json]
-  wb agents start <project-id> --agent codex|claude [--worktree <id>] [--backend <backend>]
-  wb agents jump <task-id>
-  wb agents stop <task-id>
-  wb compatibility observe --client <client> --feature <feature> --source <source>
-  wb doctor [--profile <name>] [--json] [--strict]
-  wb dashboard [--open auto|cmux|browser|none] [--port <0-65535>]
-  wb config validate
-  wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
-`
 }

@@ -181,28 +181,36 @@ func TestDashboardOpenUsesWindowsTerminalPlatformFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selection.Adapter.Name() != backend.WindowsTerminal {
+	if selection.Adapter.Name() != backend.WindowsTerminal || selection.Surface != backend.WindowsTerminal || selection.Session != "" {
 		t.Fatalf("expected Windows Terminal, got %s", selection.Adapter.Name())
 	}
 }
 
-func TestDashboardOpenUsesWindowsTerminalInWSL(t *testing.T) {
+func TestDashboardOpenUsesTmuxSessionViaWindowsTerminalInWSL(t *testing.T) {
 	windowsTerminal := &dashboardStubAdapter{name: backend.WindowsTerminal, available: true}
+	tmux := &dashboardStubAdapter{name: backend.Tmux, available: true}
 	environment := backend.Environment{GOOS: "linux", Getenv: func(key string) string {
-		if key == "WSL_DISTRO_NAME" {
+		switch key {
+		case "WSL_DISTRO_NAME":
 			return "Ubuntu"
+		case "TMUX":
+			return "/tmp/tmux,1,0"
+		default:
+			return ""
 		}
-		return ""
 	}}
 	request := backend.OpenRequest{Project: projects.Project{ID: "alpha", DefaultBackend: "auto"}, Profile: config.DefaultProfile()}
-	registry := backend.NewRegistry(environment, windowsTerminal)
+	registry := backend.NewRegistry(environment, windowsTerminal, tmux)
 
 	selection, err := selectDashboardOpenBackend(context.Background(), registry, request, backend.Auto, environment)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selection.Adapter.Name() != backend.WindowsTerminal {
-		t.Fatalf("expected Windows Terminal in WSL, got %s", selection.Adapter.Name())
+	if selection.Adapter.Name() != backend.WindowsTerminal || selection.Session != backend.Tmux || selection.Surface != backend.WindowsTerminal {
+		t.Fatalf("expected tmux via Windows Terminal in WSL, got %#v", selection)
+	}
+	if tmux.detects != 1 {
+		t.Fatalf("tmux capability should be checked without opening or switching a client: detects=%d", tmux.detects)
 	}
 }
 
@@ -229,14 +237,14 @@ func TestDashboardOpenSkipsPriorityCMUXOverSSH(t *testing.T) {
 	}
 }
 
-func TestDashboardOpenRejectsExplicitInteractiveBackend(t *testing.T) {
+func TestDashboardOpenRejectsExplicitTmuxWithoutSupportedSurface(t *testing.T) {
 	tmux := &dashboardStubAdapter{name: backend.Tmux, available: true}
 	environment := backend.Environment{GOOS: "darwin", Getenv: func(string) string { return "" }}
 	request := backend.OpenRequest{Project: projects.Project{ID: "alpha"}, Profile: config.DefaultProfile()}
 	registry := backend.NewRegistry(environment, tmux)
 
 	_, err := selectDashboardOpenBackend(context.Background(), registry, request, backend.Tmux, environment)
-	if err == nil || !strings.Contains(err.Error(), "supports only cmux or Windows Terminal") {
+	if err == nil || !strings.Contains(err.Error(), "requires WSL with Windows Terminal") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

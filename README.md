@@ -28,6 +28,11 @@ wb projects show <id> [--json]
 wb projects add <path> [--id <id>] [--profile <profile>]
 wb projects remove <id>
 wb open <id> [--backend auto|cmux|windows-terminal|tmux|shell]
+wb sessions list [--json]
+wb sessions show <session-name> [--json]
+wb sessions jump <session-name>
+wb sessions adopt <project-id> [--json]
+wb sessions stop <project-id> [--json]
 wb worktrees list <project-id> [--json]
 wb worktrees create <project-id> <branch> [--base <ref>]
 wb worktrees remove <worktree-id> [--delete-branch]
@@ -39,14 +44,40 @@ wb agents stop <task-id>
 wb compatibility observe --client <client> --feature <feature> --source <source>
 wb doctor [--profile <name>] [--json] [--strict]
 wb dashboard [--open auto|cmux|browser|none] [--port <0-65535>]
+wb server start [--open auto|cmux|browser|none] [--port <0-65535>] [--json]
+wb server stop [--json]
+wb server status [--json]
 wb config validate
 wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
+wb completion zsh
 ```
 
 `projects add` resolves the path to a canonical absolute directory and rejects
 duplicate IDs or paths. `projects remove` edits only the registry; it never
 deletes the repository. JSON reads emit exactly one schema-v1 envelope on
 stdout, with diagnostics reserved for stderr.
+
+## Command help and zsh completion
+
+`wb` and `wb --help` show only the command catalog. Group and leaf
+help provide progressively more detail:
+
+```bash
+wb projects --help
+wb projects add --help
+wb server start --help
+wb help sessions adopt
+```
+
+`wb completion zsh` prints the bundled completion function. It completes
+commands, subcommands, flags, enumerated option values, and live project,
+session, and Agent task IDs where available.
+
+`make install` installs the function at
+`~/.local/share/zsh/site-functions/_wb` and appends one idempotent,
+marked Workbench block to `~/.zshrc`. Existing zsh configuration is
+preserved. Override `WB_ZSH_COMPLETION_DIR` or `WB_ZSHRC` when a
+different layout is required.
 
 ## Files
 
@@ -175,6 +206,33 @@ open indefinitely; this is a pipe-lifetime guarantee, not portable process-tree
 ownership. Interactive shell/tmux sessions intentionally have no launch timeout
 because their lifetime is controlled by the user.
 
+## Tmux sessions
+
+Workbench names a project tmux session exactly after the stable project ID. A
+session created by Workbench receives three tmux user options:
+
+```text
+@workbench_managed=1
+@workbench_project_id=<project-id>
+@workbench_project_path=<canonical-project-path>
+```
+
+`wb sessions list` classifies live tmux sessions as `managed`, `legacy`, or
+`foreign`. Opening an existing legacy session remains compatible but never
+claims ownership implicitly. To let Workbench stop such a session, explicitly
+adopt it after reviewing its first pane path:
+
+```bash
+wb sessions show alpha
+wb sessions adopt alpha
+wb sessions stop alpha
+```
+
+Adoption requires the live session name and first pane path to match the
+registered project. Stop re-reads the metadata and project path immediately
+before issuing `kill-session`; legacy, incomplete, and mismatched ownership
+returns conflict exit code 4 without terminating the session.
+
 ## Worktrees
 
 Workbench creates linked worktrees outside the main repository at:
@@ -297,6 +355,27 @@ wb dashboard --open cmux
 wb dashboard --open none --port 0
 ```
 
+For a persistent background Dashboard, use the managed server commands:
+
+```bash
+wb server start
+wb server status
+wb server stop
+```
+
+`server start` defaults to an OS-assigned loopback port and does not open a
+browser unless `--open` is supplied. It records its PID, URL, instance identity,
+and private shutdown token in the mode-0600 Workbench state file `server.json`;
+stdout and stderr go to `server.log`. `server status` verifies the live instance
+over loopback rather than trusting the PID alone, and `server stop` requests a
+token-authenticated graceful shutdown. Both status and stop support `--json`.
+
+On WSL, Dashboard project Open can keep tmux as the persistent session while
+using Windows Terminal as the visible surface. With `prefer_current_tmux = true`
+or a tmux project/profile preference, `auto` opens a Windows Terminal tab that
+runs `tmux new-session -A -s <project-id>` inside the selected distro. The
+background server never attaches or switches its inherited tmux client.
+
 The Dashboard shows registered projects and Agent tasks, linked worktrees, Git
 change summaries, and Doctor capabilities. Mutations are limited to typed
 project-open and Agent start/jump/stop actions. Cross-origin requests and action
@@ -323,6 +402,11 @@ The default destination is `~/.local/bin/wb`. Override it when needed:
 ```bash
 make install WB_INSTALL_DIR="$HOME/bin"
 ```
+
+The install target also refreshes zsh completion and its managed `~/.zshrc`
+registration. Run `make install-completion` to refresh only completion after the
+binary is already installed.
+
 
 ```bash
 go test ./...

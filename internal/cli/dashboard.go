@@ -26,6 +26,7 @@ import (
 	"github.com/jisung9870/workbench/internal/dashboard"
 	"github.com/jisung9870/workbench/internal/doctor"
 	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/sessions"
 	"github.com/jisung9870/workbench/internal/worktrees"
 )
 
@@ -207,29 +208,56 @@ func (service *dashboardService) openProject(ctx context.Context, request dashbo
 	}
 	executor := &backend.OSExecutor{Stdout: io.Discard, Stderr: io.Discard}
 	environment := backend.CurrentEnvironment()
-	selection, err := selectDashboardOpenBackend(ctx, dashboardBackendRegistry(executor, environment), backend.OpenRequest{Project: project, Profile: profile}, requested, environment)
+	openRequest := backend.OpenRequest{Project: project, Profile: profile}
+	selection, err := selectDashboardOpenBackend(ctx, dashboardBackendRegistry(executor, environment), openRequest, requested, environment)
 	if err != nil {
 		return dashboard.ActionResult{}, dashboardCommandError(backendSelectionError(err))
 	}
-	result, err := selection.Adapter.OpenProject(ctx, backend.OpenRequest{Project: project, Profile: profile})
+	if selection.Session == backend.Tmux {
+		if _, _, ensureErr := sessions.NewManager(executor, os.Getenv).Ensure(ctx, project); ensureErr != nil {
+			return dashboard.ActionResult{}, dashboardCommandError(sessionError(ensureErr))
+		}
+	}
+
+	openRequest.Session = selection.Session
+	result, err := selection.Adapter.OpenProject(ctx, openRequest)
 	if err != nil {
 		return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusInternalServerError, Code: "BACKEND_EXECUTION_FAILED", Message: err.Error()}
 	}
-	return dashboard.ActionResult{Message: fmt.Sprintf("opened %s with %s", project.ID, result.Backend)}, nil
+	session := result.Session
+	if session == "" {
+		session = selection.Session
+	}
+	surface := result.Surface
+	if surface == "" {
+		surface = selection.Surface
+	}
+	message := fmt.Sprintf("opened %s with %s", project.ID, surface)
+	if session != "" {
+		message = fmt.Sprintf("opened %s with %s via %s", project.ID, session, surface)
+	}
+	return dashboard.ActionResult{Message: message, Session: session, Surface: surface}, nil
 }
 
 func selectDashboardOpenBackend(ctx context.Context, registry *backend.Registry, request backend.OpenRequest, requested backend.Name, environment backend.Environment) (backend.Selection, error) {
 	if requested != backend.Auto {
-		if requested != backend.CMUX && requested != backend.WindowsTerminal {
-			return backend.Selection{}, fmt.Errorf("Dashboard project open supports only cmux or Windows Terminal, not %s", requested)
+		if requested == backend.Tmux {
+			return selectDashboardTmuxSurface(ctx, registry, request, environment)
 		}
-		return registry.Select(ctx, request, requested)
+		if requested != backend.CMUX && requested != backend.WindowsTerminal {
+			return backend.Selection{}, fmt.Errorf("Dashboard project open supports tmux, cmux, or Windows Terminal, not %s", requested)
+		}
+		selection, err := registry.Select(ctx, request, requested)
+		if err == nil {
+			selection.Surface = selection.Adapter.Name()
+		}
+		return selection, err
 	}
 
 	candidates := []backend.Name{}
 	seen := map[backend.Name]struct{}{}
 	appendCandidate := func(name backend.Name) {
-		if name != backend.CMUX && name != backend.WindowsTerminal {
+		if name != backend.Tmux && name != backend.CMUX && name != backend.WindowsTerminal {
 			return
 		}
 		if _, exists := seen[name]; exists {
@@ -240,6 +268,9 @@ func selectDashboardOpenBackend(ctx context.Context, registry *backend.Registry,
 	}
 	appendCandidate(backend.Name(request.Project.DefaultBackend))
 	appendCandidate(backend.Name(request.Profile.DefaultBackend))
+	if request.Profile.PreferCurrentTmux && environment.IsWSL() {
+		appendCandidate(backend.Tmux)
+	}
 	for _, configured := range request.Profile.BackendPriority {
 		candidate := backend.Name(configured)
 		if candidate == backend.CMUX && environment.IsSSH() {
@@ -256,7 +287,14 @@ func selectDashboardOpenBackend(ctx context.Context, registry *backend.Registry,
 
 	reasons := []string{}
 	for _, candidate := range candidates {
-		selection, err := registry.Select(ctx, request, candidate)
+		var selection backend.Selection
+		var err error
+		if candidate == backend.Tmux {
+			selection, err = selectDashboardTmuxSurface(ctx, registry, request, environment)
+		} else {
+			selection, err = registry.Select(ctx, request, candidate)
+			selection.Surface = candidate
+		}
 		if err == nil {
 			return selection, nil
 		}
@@ -266,11 +304,29 @@ func selectDashboardOpenBackend(ctx context.Context, registry *backend.Registry,
 		}
 		reasons = append(reasons, fmt.Sprintf("%s: %s", candidate, unavailable.Reason))
 	}
-	reason := "no Dashboard-compatible backend was detected; use the CLI for tmux or shell project open"
+	reason := "no Dashboard-compatible session and terminal surface combination was detected"
 	if len(reasons) > 0 {
 		reason += "; " + strings.Join(reasons, "; ")
 	}
 	return backend.Selection{}, &backend.UnavailableError{Backend: backend.Auto, Reason: reason}
+}
+
+func selectDashboardTmuxSurface(ctx context.Context, registry *backend.Registry, request backend.OpenRequest, environment backend.Environment) (backend.Selection, error) {
+	if !environment.IsWSL() {
+		return backend.Selection{}, &backend.UnavailableError{Backend: backend.Tmux, Reason: "Dashboard tmux open currently requires WSL with Windows Terminal"}
+	}
+	_, err := registry.Select(ctx, request, backend.Tmux)
+	if err != nil {
+		return backend.Selection{}, err
+	}
+	request.Session = backend.Tmux
+	selection, err := registry.Select(ctx, request, backend.WindowsTerminal)
+	if err != nil {
+		return backend.Selection{}, err
+	}
+	selection.Session = backend.Tmux
+	selection.Surface = backend.WindowsTerminal
+	return selection, nil
 }
 
 func (service *dashboardService) agentBackend(ctx context.Context, projectID, requestedValue string) (backend.Name, error) {
