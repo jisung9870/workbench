@@ -12,6 +12,8 @@ wb secrets init [--json]
 wb secrets list [service] [--json]
 wb secrets set <service> <field> [--replace] [--json]
 wb secrets get <service> [field]
+wb secrets edit <service> <field> [--editor <executable>]
+wb secrets copy <service> <field> [--clear-after <duration>]
 wb secrets remove <service> [field] [--yes] [--json]
 wb secrets migrate check|apply [--json]
 ```
@@ -24,6 +26,21 @@ are preserved.
 
 `remove` asks for `y/N` confirmation on an interactive terminal. Scripts and
 other non-interactive callers must state intent with `--yes`.
+
+`edit` decrypts exactly one field into a mode-`0600` temporary file under the
+Workbench state directory, runs the executable selected by `--editor`,
+`VISUAL`, or `EDITOR`, and replaces the encrypted value only after the editor
+exits successfully. Editor strings with embedded arguments are rejected so no
+shell is involved. The temporary plaintext file is removed on every return
+path.
+
+`copy` sends the value to the platform clipboard command through stdin, never
+through argv. By default a detached Workbench process checks the clipboard
+after 30 seconds and clears it only if its SHA-256 still matches the copied
+value, preserving anything copied later. Use `--clear-after 0` to disable this
+timer or set a duration through `24h`. Supported providers are macOS
+`pbcopy`/`pbpaste`, Wayland `wl-copy`/`wl-paste`, X11 `xclip`, and Windows/WSL
+clipboard tools.
 
 `list` exposes names only. JSON responses use the normal schema-v1 Workbench
 envelope and contain paths, service names, field names, counts, health flags,
@@ -45,7 +62,10 @@ Native Windows uses `%APPDATA%\workbench` for the identity and store and
 `0700`; identity, store, and backups are mode `0600`. Writes create a
 same-directory encrypted temporary file, flush it, rename it, and flush the
 directory. Backups contain ciphertext only. Decrypted JSON and individual
-values remain in process memory and are never written to a temporary file.
+values remain in process memory except during an explicit `secrets edit`.
+That command uses the protected, short-lived state-directory file described
+above; editors may create their own swap, backup, or recovery files, so use an
+editor configuration appropriate for secrets.
 Mutations also hold an OS file lock, so separate Workbench processes and
 terminal sessions cannot overwrite each other's read-modify-write updates.
 If post-write decryption validation fails, Workbench atomically restores the
@@ -90,9 +110,16 @@ transition period with two copies of the same private identity and ciphertext;
 after exercising Workbench, retire the legacy copy manually according to your
 own backup policy.
 
+## Dashboard boundary
+
+The Dashboard lists only Secret service and field names. Its typed write action
+accepts a plaintext value for a single store or replacement request but never
+returns that value in the response or subsequent snapshots. Removal is also a
+typed service/field action. Environment editing continues to accept only
+`sec://service/field` references, never inline Secret values.
+
 ## Deliberately deferred
 
 The first slice does not implement passphrase-encrypted identities, ASCII
-armor, clipboard copy, whole-store editor integration, environment
-export/injection, Dashboard rendering, or project/Task attachment. These are
-separate features because each expands the plaintext exposure boundary.
+armor, whole-store editing, or project/Task attachment. These remain separate
+features because each expands the plaintext exposure boundary.

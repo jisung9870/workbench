@@ -86,6 +86,7 @@ function render() {
 
   renderTmux(data.tmux || { available: false, reason: "tmux observation unavailable", sessions: [] });
   renderScheduler(data.scheduler || { available: false, running: false, reason: "scheduler unavailable", jobs: [] });
+  renderSecrets(data.secrets || { available: false, reason: "Secret store unavailable", entries: [] });
   renderUnregisteredTasks(tasks);
   renderOverview(data.overview || { counts: {}, attention: [], work_locations: [], tool_health: data.tool_health || { available: false, capabilities: [], summary: {} } });
 
@@ -150,6 +151,28 @@ function render() {
   });
   $("workflow-history").innerHTML = workflowHistory.length ? workflowHistory.slice(0, 8).map(run => `<div class="row"><strong>${esc(run.workflow_id)}</strong><span class="status ${esc(run.status)}">${esc(run.status)}</span><small>${esc(new Date(run.finished_at).toLocaleString())}${run.output_truncated ? " · output capped" : ""}</small></div>`).join("") : '<div class="row"><span>No workflow runs recorded</span></div>';
   renderTask();
+}
+
+function renderSecrets(catalog) {
+  const status = $("secret-status");
+  const target = $("secret-catalog");
+  const form = $("secret-form");
+  const entries = Array.isArray(catalog?.entries) ? catalog.entries : [];
+  status.textContent = catalog?.available ? `${entries.length} entries` : "unavailable";
+  status.className = `status ${catalog?.available ? "available" : "unavailable"}`;
+  form.hidden = !catalog?.available;
+  if (!catalog?.available) {
+    target.innerHTML = `<div class="context-state error"><strong>Secret store unavailable</strong><p>${esc(catalog?.reason || "Initialize it with wb secrets init.")}</p></div>`;
+    return;
+  }
+  target.innerHTML = entries.length ? entries.map(entry => `<div><code>${esc(entry.service)}/${esc(entry.field)}</code><button type="button" class="danger" data-secret-service="${esc(entry.service)}" data-secret-field="${esc(entry.field)}">Remove</button></div>`).join("") : '<p>No Secrets stored</p>';
+  document.querySelectorAll("[data-secret-service]").forEach(button => {
+    button.onclick = () => {
+      const label = `${button.dataset.secretService}/${button.dataset.secretField}`;
+      if (!window.confirm(`Remove Secret ${label}?`)) return;
+      action({ action: "update_secret", secret: { operation: "remove", service: button.dataset.secretService, field: button.dataset.secretField } });
+    };
+  });
 }
 
 function renderContexts(contexts, project) {
@@ -238,6 +261,18 @@ function bindContextEditor(environmentId) {
       mutate({ operation: button.dataset.environmentOperation, variable: button.dataset.variable });
     };
   });
+}
+
+const secretForm = $("secret-form");
+if (secretForm) {
+  secretForm.onsubmit = event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const value = values.get("value");
+    form.elements.value.value = "";
+    action({ action: "update_secret", secret: { operation: "set", service: values.get("service"), field: values.get("field"), value, replace: values.get("replace") === "on" } });
+  };
 }
 
 function renderScheduler(scheduler) {

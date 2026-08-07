@@ -410,6 +410,45 @@ func TestSecretsCLIRejectsArgvValueAndOverwriteWithoutLeak(t *testing.T) {
 	}
 }
 
+func TestSecretsEditUsesProtectedTemporaryFileAndRemovesIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-only")
+	}
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	var stdout, stderr bytes.Buffer
+	if code := RunWithInput([]string{"secrets", "init"}, strings.NewReader(""), &stdout, &stderr); code != ExitOK {
+		t.Fatal(stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "set", "svc", "token"}, strings.NewReader("before"), &stdout, &stderr); code != ExitOK {
+		t.Fatal(stderr.String())
+	}
+	editor := filepath.Join(root, "editor.sh")
+	if err := os.WriteFile(editor, []byte("#!/bin/sh\n[ \"$(stat -f %Lp \"$1\" 2>/dev/null || stat -c %a \"$1\")\" = 600 ] || exit 8\nprintf edited-value > \"$1\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "edit", "svc", "token", "--editor", editor}, strings.NewReader(""), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("edit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := RunWithInput([]string{"secrets", "get", "svc", "token"}, strings.NewReader(""), &stdout, &stderr); code != ExitOK || stdout.String() != "edited-value\n" {
+		t.Fatalf("get=%d stdout=%q stderr=%s", code, stdout.String(), stderr.String())
+	}
+	stateDir := filepath.Join(root, "state", "workbench")
+	matches, err := filepath.Glob(filepath.Join(stateDir, ".secret-edit-*"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("plaintext temporary files remain: %v err=%v", matches, err)
+	}
+}
+
 func TestSecretRemovalInteractiveConfirmation(t *testing.T) {
 	var stderr bytes.Buffer
 	confirmed, err := confirmSecretRemoval(strings.NewReader("n\n"), &stderr, "svc/token", false, true)

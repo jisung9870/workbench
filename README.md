@@ -41,6 +41,8 @@ wb secrets init [--json]
 wb secrets list [service] [--json]
 wb secrets set <service> <field> [--replace] [--json]
 wb secrets get <service> [field]
+wb secrets edit <service> <field> [--editor <executable>]
+wb secrets copy <service> <field> [--clear-after <duration>]
 wb secrets remove <service> [field] [--yes] [--json]
 wb secrets migrate check|apply [--json]
 wb open <id> [--backend auto|cmux|windows-terminal|tmux|shell] [--session none|tmux]
@@ -181,6 +183,8 @@ wb secrets init
 printf '%s' "$TOKEN" | wb secrets set experiment token
 wb secrets list experiment
 TOKEN="$(wb secrets get experiment token)"
+wb secrets copy experiment token
+wb secrets edit experiment token --editor nvim
 ```
 
 Legacy binbox files can be checked and copied without deleting or changing the
@@ -194,8 +198,9 @@ wb secrets migrate check
 wb secrets migrate apply
 ```
 
-See [docs/secrets.md](docs/secrets.md) for the storage, migration, and deferred
-feature contracts.
+The Dashboard exposes metadata-only Secret listing plus typed store, replace,
+and remove actions. See [docs/secrets.md](docs/secrets.md) for the storage,
+clipboard auto-clear, editor boundary, and migration contracts.
 
 An optional active profile can select a backend and machine-local Windows
 Terminal launch preferences:

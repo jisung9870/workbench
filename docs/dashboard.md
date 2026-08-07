@@ -53,6 +53,8 @@ reachable address is not configurable.
 - projects from the project store;
 - a metadata-only `contexts` projection with registry availability, environment metadata, project links, export key names,
   and secret-reference availability status;
+- a metadata-only Secret catalog with typed store, explicit replacement, and
+  remove actions;
 - a live tmux session/window/pane hierarchy using stable tmux IDs and explicit
   managed, legacy, or foreign ownership;
 - scheduler availability, job status, last/next run, and expiry counts;

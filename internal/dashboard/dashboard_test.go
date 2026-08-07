@@ -88,7 +88,7 @@ func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
 	}{
 		{path: "/", contentType: "text/html", contains: []string{`id="theme-select"`, `href="/guide"`, `/assets/theme.js`, `id="overview-heading"`, `id="overview-attention"`, `id="overview-locations"`, `id="overview-tools"`, `id="tmux-sessions"`, `id="tmux-availability"`, `id="scheduler-status"`, `id="scheduler-jobs"`, `id="unregistered-tasks"`, `id="contexts-heading"`, `id="context-status"`, `id="contexts"`, `id="agent-history"`, `id="agent-registry-path"`, `id="clear-agent-history"`, `id="workflows"`, `id="workflow-history"`, `id="task-terminal-note"`, `data-task-action="jump_task"`, `data-task-action="stop_task"`}},
 		{path: "/guide", contentType: "text/html", contains: []string{`id="guide-search"`, `id="architecture"`, `id="cli-reference"`, `id="troubleshooting"`, `/assets/dashboard-overview-light.jpg`, `alt="Workbench Dashboard 화면 구성`}},
-		{path: "/assets/app.js", contentType: "text/javascript", contains: []string{`"starting", "running", "waiting", "idle"`, `task.provenance`, `renderOverview`, `renderContexts`, `renderScheduler`, `registry_available`, `secret_references`, `export_keys`, `work_locations`, `tool_health`, `clear_agent_history`, `agent_registry_path`, `workflow_id`, `run_workflow`, `data-workflow-id`, `task-terminal-note`, `attach_session`, `adopt_session`, `stop_session`, `session.ownership`}},
+		{path: "/assets/app.js", contentType: "text/javascript", contains: []string{`"starting", "running", "waiting", "idle"`, `task.provenance`, `renderOverview`, `renderContexts`, `renderScheduler`, `renderSecrets`, `update_secret`, `form.elements.value.value = ""`, `registry_available`, `secret_references`, `export_keys`, `work_locations`, `tool_health`, `clear_agent_history`, `agent_registry_path`, `workflow_id`, `run_workflow`, `data-workflow-id`, `task-terminal-note`, `attach_session`, `adopt_session`, `stop_session`, `session.ownership`}},
 		{path: "/assets/theme.js", contentType: "text/javascript", contains: []string{"workbench.dashboard.theme.v1", "localStorage"}},
 		{path: "/assets/guide.js", contentType: "text/javascript", contains: []string{"guide-search", "IntersectionObserver"}},
 		{path: "/assets/dashboard-overview-light.jpg", contentType: "image/jpeg"},
@@ -224,6 +224,23 @@ func TestHandlerRejectsUnknownNestedEnvironmentFields(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || service.actions.Load() != 0 {
 		t.Fatalf("unknown nested field was accepted: status=%d calls=%d", response.Code, service.actions.Load())
+	}
+}
+
+func TestHandlerRejectsUnknownNestedSecretFields(t *testing.T) {
+	service := &fakeService{}
+	handler, err := NewHandler(service, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"action":"update_secret","secret":{"operation":"set","service":"github","field":"token","value":"secret","command":"must-not-be-accepted"}}`
+	request := httptest.NewRequest(http.MethodPost, "http://workbench.local/api/v1/actions", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Workbench-Token", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || service.actions.Load() != 0 {
+		t.Fatalf("unknown nested Secret field was accepted: status=%d calls=%d", response.Code, service.actions.Load())
 	}
 }
 

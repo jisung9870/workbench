@@ -28,6 +28,7 @@ import (
 	"github.com/jisung9870/workbench/internal/overview"
 	"github.com/jisung9870/workbench/internal/projects"
 	"github.com/jisung9870/workbench/internal/scheduler"
+	"github.com/jisung9870/workbench/internal/secrets"
 	"github.com/jisung9870/workbench/internal/tasks"
 	"github.com/jisung9870/workbench/internal/workflows"
 	"github.com/jisung9870/workbench/internal/worktrees"
@@ -36,7 +37,7 @@ import (
 //go:embed assets/*
 var assets embed.FS
 
-const maxActionBody = 16 << 10
+const maxActionBody = (16 << 20) + (64 << 10)
 
 type ChangeSummary = overview.ChangeSummary
 
@@ -99,6 +100,12 @@ type Contexts struct {
 	Environments      []ContextEnvironment `json:"environments"`
 }
 
+type SecretCatalog struct {
+	Available bool            `json:"available"`
+	Reason    string          `json:"reason,omitempty"`
+	Entries   []secrets.Entry `json:"entries"`
+}
+
 func SafeWorkflowRun(result workflows.Result) WorkflowRun {
 	return WorkflowRun{ID: result.ID, WorkflowID: result.WorkflowID, ProjectID: result.ProjectID, Status: result.Status, ExitCode: result.ExitCode, StartedAt: result.StartedAt, FinishedAt: result.FinishedAt, DurationMillis: result.DurationMillis, OutputTruncated: result.OutputTruncated, PaneID: result.PaneID, SessionName: result.SessionName, EnvironmentID: result.EnvironmentID, ResolveSecrets: result.ResolveSecrets}
 }
@@ -122,6 +129,7 @@ type Snapshot struct {
 	WorkflowHistory   []WorkflowRun            `json:"workflow_history"`
 	Contexts          Contexts                 `json:"contexts"`
 	Scheduler         scheduler.Snapshot       `json:"scheduler"`
+	Secrets           SecretCatalog            `json:"secrets"`
 }
 
 type ActionRequest struct {
@@ -135,6 +143,7 @@ type ActionRequest struct {
 	WorkflowID  string               `json:"workflow_id,omitempty"`
 	SessionName string               `json:"session_name,omitempty"`
 	Environment *EnvironmentMutation `json:"environment,omitempty"`
+	Secret      *SecretMutation      `json:"secret,omitempty"`
 }
 
 type EnvironmentMutation struct {
@@ -148,6 +157,14 @@ type EnvironmentMutation struct {
 	Value         string `json:"value,omitempty"`
 	Reference     string `json:"reference,omitempty"`
 	ExpiresAt     string `json:"expires_at,omitempty"`
+}
+
+type SecretMutation struct {
+	Operation string `json:"operation"`
+	Service   string `json:"service"`
+	Field     string `json:"field"`
+	Value     string `json:"value,omitempty"`
+	Replace   bool   `json:"replace,omitempty"`
 }
 
 type ActionResult struct {

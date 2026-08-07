@@ -3,10 +3,13 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -24,6 +27,7 @@ import (
 	wtadapter "github.com/jisung9870/workbench/adapters/windows_terminal"
 	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/backend"
+	"github.com/jisung9870/workbench/internal/clipboard"
 	"github.com/jisung9870/workbench/internal/compatibility"
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/doctor"
@@ -67,6 +71,12 @@ func RunWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	}
 	if handled, code := handleCompletion(args, stdout, stderr); handled {
 		return code
+	}
+	if len(args) >= 2 && args[0] == "secrets" && args[1] == "_clear-clipboard" {
+		if err := runClipboardClear(args[2:]); err != nil {
+			return report(stdout, stderr, false, err)
+		}
+		return ExitOK
 	}
 	jsonMode := contains(args, "--json")
 	paths, err := config.ResolvePaths()
@@ -1766,6 +1776,59 @@ func runSecrets(args []string, paths config.Paths, stdin io.Reader, stdout, stde
 			_, _ = fmt.Fprintln(stdout)
 		}
 		return nil
+	case "edit":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--editor": true})
+		if parseErr != nil || len(positionals) != 2 {
+			return invalid("usage: wb secrets edit <service> <field> [--editor <executable>]")
+		}
+		editor := options["--editor"]
+		if editor == "" {
+			editor = os.Getenv("VISUAL")
+		}
+		if editor == "" {
+			editor = os.Getenv("EDITOR")
+		}
+		if editor == "" || len(strings.Fields(editor)) != 1 {
+			return invalid("set --editor, VISUAL, or EDITOR to one editor executable without arguments")
+		}
+		if err := editSecret(store, paths, positionals[0], positionals[1], editor, stdin, stdout, stderr); err != nil {
+			return secretError(err)
+		}
+		fmt.Fprintf(stdout, "updated %s/%s\n", positionals[0], positionals[1])
+		return nil
+	case "copy":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--clear-after": true})
+		if parseErr != nil || len(positionals) != 2 {
+			return invalid("usage: wb secrets copy <service> <field> [--clear-after <duration>]")
+		}
+		clearAfter := 30 * time.Second
+		if raw, ok := options["--clear-after"]; ok {
+			var durationErr error
+			clearAfter, durationErr = time.ParseDuration(raw)
+			if durationErr != nil || clearAfter < 0 || clearAfter > 24*time.Hour {
+				return invalid("--clear-after must be a duration from 0 through 24h")
+			}
+		}
+		value, _, getErr := store.Get(positionals[0], positionals[1])
+		if getErr != nil {
+			return secretError(getErr)
+		}
+		defer zeroBytes(value)
+		if err := clipboard.Write(value); err != nil {
+			return &commandError{ExitCode: ExitUnavailable, Code: "CLIPBOARD_UNAVAILABLE", Message: err.Error()}
+		}
+		if clearAfter > 0 {
+			digest := sha256.Sum256(value)
+			if err := scheduleClipboardClear(clearAfter, hex.EncodeToString(digest[:])); err != nil {
+				return generalError(err)
+			}
+		}
+		fmt.Fprintf(stdout, "copied %s/%s to clipboard", positionals[0], positionals[1])
+		if clearAfter > 0 {
+			fmt.Fprintf(stdout, "; clears after %s if unchanged", clearAfter)
+		}
+		fmt.Fprintln(stdout)
+		return nil
 	case "remove", "rm":
 		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false, "--yes": false})
 		if parseErr != nil || len(positionals) < 1 || len(positionals) > 2 {
@@ -1815,6 +1878,91 @@ func runSecrets(args []string, paths config.Paths, stdin io.Reader, stdout, stde
 	default:
 		return invalid("unknown secrets subcommand %q", args[0])
 	}
+}
+
+func editSecret(store *secrets.Store, paths config.Paths, service, field, editor string, stdin io.Reader, stdout, stderr io.Writer) error {
+	value, _, err := store.Get(service, field)
+	if err != nil {
+		return err
+	}
+	defer zeroBytes(value)
+	if err := os.MkdirAll(paths.StateDir, 0o700); err != nil {
+		return fmt.Errorf("prepare Secret editor directory: %w", err)
+	}
+	file, err := os.CreateTemp(paths.StateDir, ".secret-edit-*")
+	if err != nil {
+		return fmt.Errorf("create Secret editor file: %w", err)
+	}
+	name := file.Name()
+	defer os.Remove(name)
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("secure Secret editor file: %w", err)
+	}
+	if _, err := file.Write(value); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write Secret editor file: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync Secret editor file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close Secret editor file: %w", err)
+	}
+	command := exec.Command(editor, name)
+	command.Stdin, command.Stdout, command.Stderr = stdin, stdout, stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("Secret editor failed: %w", err)
+	}
+	edited, err := os.ReadFile(name)
+	if err != nil {
+		return fmt.Errorf("read Secret editor file: %w", err)
+	}
+	defer zeroBytes(edited)
+	if len(edited) > 16<<20 {
+		return &secrets.InvalidError{Message: "secret value is too large"}
+	}
+	_, err = store.Set(service, field, edited, true)
+	return err
+}
+
+func scheduleClipboardClear(delay time.Duration, digest string) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate Workbench executable: %w", err)
+	}
+	command := exec.Command(executable, "secrets", "_clear-clipboard", "--after", delay.String(), "--hash", digest)
+	command.Stdin, command.Stdout, command.Stderr = nil, io.Discard, io.Discard
+	configureBackgroundCommand(command)
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("schedule clipboard clear: %w", err)
+	}
+	return command.Process.Release()
+}
+
+func runClipboardClear(args []string) *commandError {
+	positionals, options, parseErr := parseOptions(args, map[string]bool{"--after": true, "--hash": true})
+	if parseErr != nil || len(positionals) != 0 || options["--after"] == "" || len(options["--hash"]) != sha256.Size*2 {
+		return invalid("invalid internal clipboard clear request")
+	}
+	delay, durationErr := time.ParseDuration(options["--after"])
+	if durationErr != nil || delay <= 0 || delay > 24*time.Hour {
+		return invalid("invalid internal clipboard clear delay")
+	}
+	time.Sleep(delay)
+	current, readErr := clipboard.Read()
+	if readErr != nil {
+		return &commandError{ExitCode: ExitUnavailable, Code: "CLIPBOARD_UNAVAILABLE", Message: readErr.Error()}
+	}
+	defer zeroBytes(current)
+	digest := sha256.Sum256(current)
+	if hex.EncodeToString(digest[:]) == options["--hash"] {
+		if err := clipboard.Write(nil); err != nil {
+			return &commandError{ExitCode: ExitUnavailable, Code: "CLIPBOARD_UNAVAILABLE", Message: err.Error()}
+		}
+	}
+	return nil
 }
 
 func runSecretsMigrate(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
@@ -2103,6 +2251,8 @@ Usage:
   wb secrets list [service] [--json]
   wb secrets set <service> <field> [--replace] [--json]
   wb secrets get <service> [field]
+  wb secrets edit <service> <field> [--editor <executable>]
+  wb secrets copy <service> <field> [--clear-after <duration>]
   wb secrets remove <service> [field] [--yes] [--json]
   wb secrets migrate check|apply [--json]
   wb open <project-id> [--backend <backend>] [--session none|tmux] [--window <last|new|id>] [--terminal-mode <tab|split-auto|split-horizontal|split-vertical>]

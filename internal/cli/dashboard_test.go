@@ -228,6 +228,54 @@ func TestDashboardEnvironmentMutationRejectsMixedAndSecretValueFields(t *testing
 	}
 }
 
+func TestDashboardSecretMutationsNeverReturnPlaintext(t *testing.T) {
+	root := t.TempDir()
+	paths := dashboardContextTestPaths(root)
+	store := secrets.NewStore(paths)
+	if err := store.Init(); err != nil {
+		t.Fatal(err)
+	}
+	service := &dashboardService{paths: paths}
+	const plaintext = "dashboard-secret-value"
+	result, err := service.Execute(context.Background(), dashboard.ActionRequest{Action: "update_secret", Secret: &dashboard.SecretMutation{Operation: "set", Service: "github", Field: "token", Value: plaintext}})
+	if err != nil || strings.Contains(result.Message, plaintext) {
+		t.Fatalf("set result=%#v err=%v", result, err)
+	}
+	value, _, err := store.Get("github", "token")
+	if err != nil || string(value) != plaintext {
+		t.Fatalf("stored value=%q err=%v", value, err)
+	}
+	zeroBytes(value)
+	if _, err := service.Execute(context.Background(), dashboard.ActionRequest{Action: "update_secret", Secret: &dashboard.SecretMutation{Operation: "set", Service: "github", Field: "token", Value: "replacement"}}); err == nil {
+		t.Fatal("existing Secret was replaced without explicit replace")
+	}
+	if _, err := service.Execute(context.Background(), dashboard.ActionRequest{Action: "update_secret", Secret: &dashboard.SecretMutation{Operation: "set", Service: "github", Field: "token", Value: "replacement", Replace: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Execute(context.Background(), dashboard.ActionRequest{Action: "update_secret", Secret: &dashboard.SecretMutation{Operation: "remove", Service: "github", Field: "token"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Get("github", "token"); err == nil {
+		t.Fatal("removed Secret is still readable")
+	}
+}
+
+func TestDashboardSecretMutationRejectsMixedFields(t *testing.T) {
+	service := &dashboardService{}
+	tests := []dashboard.ActionRequest{
+		{Action: "jump_pane", PaneID: "%1", Secret: &dashboard.SecretMutation{Operation: "remove", Service: "github", Field: "token"}},
+		{Action: "update_secret", ProjectID: "alpha", Secret: &dashboard.SecretMutation{Operation: "remove", Service: "github", Field: "token"}},
+		{Action: "update_secret", Secret: &dashboard.SecretMutation{Operation: "remove", Service: "github", Field: "token", Value: "must-not-be-accepted"}},
+	}
+	for _, request := range tests {
+		_, err := service.Execute(context.Background(), request)
+		var actionErr *dashboard.ActionError
+		if !errors.As(err, &actionErr) || actionErr.Code != "INVALID_ACTION" {
+			t.Fatalf("mixed mutation accepted: request=%#v err=%v", request, err)
+		}
+	}
+}
+
 func TestDashboardAdoptsAndStopsOnlyRegisteredProjectSessions(t *testing.T) {
 	root := t.TempDir()
 	projectPath := filepath.Join(root, "alpha")

@@ -46,7 +46,7 @@ _wb() {
       subcommands=('list:List Environments' 'show:Show an Environment' 'add:Add an Environment' 'expiry:Renew or clear expiry' 'remove:Remove an Environment' 'health:Check expiry and references' 'export:Emit shell exports' 'migrate:Migrate wenv.d')
       if (( CURRENT == 3 )); then _describe -t commands 'Environment command' subcommands; return; fi ;;
     secrets)
-      subcommands=('init:Initialize the store' 'list:List names' 'set:Set a value' 'get:Get a value' 'remove:Remove a value' 'migrate:Migrate legacy sec')
+      subcommands=('init:Initialize the store' 'list:List names' 'set:Set a value' 'get:Get a value' 'edit:Edit a value' 'copy:Copy with auto-clear' 'remove:Remove a value' 'migrate:Migrate legacy sec')
       if (( CURRENT == 3 )); then _describe -t commands 'Secret command' subcommands; return; fi ;;
     sessions)
       subcommands=('list:List hierarchy' 'show:Show ownership' 'jump:Jump to a pane' 'attach:Attach to a session' 'adopt:Adopt a project session' 'stop:Stop a managed session')
@@ -66,6 +66,8 @@ _wb() {
     'env show'|'env remove'|'env health'|'env export') _arguments '*:Environment ID:_wb_values "env list" "Environment ID"' ;;
     'env add') _arguments '--ttl=[Expiry duration]:duration:' '--expires-at=[Expiry timestamp]:RFC3339:' ;;
     'env expiry') _arguments '1:Environment ID:_wb_values "env list" "Environment ID"' '--ttl=[Renew for duration]:duration:' '--expires-at=[Set expiry timestamp]:RFC3339:' '--clear[Remove expiry policy]' '--json[JSON output]' ;;
+    'secrets edit') _arguments '1:service:' '2:field:' '--editor=[Editor executable]:executable:_command_names -e' ;;
+    'secrets copy') _arguments '1:service:' '2:field:' '--clear-after=[Conditional clipboard clear delay]:duration:' ;;
     'sessions show'|'sessions attach') _arguments '*:session:_wb_values "sessions list" "tmux session"' ;;
     'sessions jump') _arguments '*:pane ID:' ;;
     'sessions adopt'|'sessions stop') _arguments '*:project ID:_wb_values "projects list" "project ID"' ;;

@@ -53,6 +53,18 @@
           <section class="panel overview-panel"><div class="panel-heading"><div><span class="eyebrow">bb doctor</span><h3>Tool health</h3></div></div><div id="overview-tools" class="rows"></div></section>
         </div>
       </section>
+      <section class="panel secrets-panel" aria-labelledby="secrets-heading">
+        <div class="panel-heading"><div><span class="eyebrow">Encrypted local store</span><h2 id="secrets-heading">Secrets</h2></div><span id="secret-status" class="status">checking</span></div>
+        <p class="workflow-note">Only service and field names are displayed. Secret values are accepted for writes and are never returned by the Dashboard API.</p>
+        <div id="secret-catalog" class="context-secret-list" aria-live="polite"></div>
+        <form id="secret-form" class="context-editor secret-editor" autocomplete="off">
+          <label>Service<input name="service" autocomplete="off" required></label>
+          <label>Field<input name="field" autocomplete="off" required></label>
+          <label class="secret-value-field">Value<input name="value" type="password" autocomplete="new-password" required></label>
+          <label class="secret-replace"><input name="replace" type="checkbox"> Replace an existing Secret</label>
+          <button type="submit">Store Secret</button>
+        </form>
+      </section>
       <div id="empty" class="empty"><span>⌘</span><h2>Select a project</h2><p>Inspect tasks, worktrees, changes, and safe actions.</p></div>
       <div id="workspace" hidden>
         <section class="project-hero">

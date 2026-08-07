@@ -184,6 +184,13 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 	for _, item := range workflowHistory {
 		safeWorkflowHistory = append(safeWorkflowHistory, dashboard.SafeWorkflowRun(item))
 	}
+	secretCatalog := dashboard.SecretCatalog{Available: true, Entries: []secrets.Entry{}}
+	if entries, secretErr := secrets.NewStore(service.paths).List(""); secretErr != nil {
+		secretCatalog.Available = false
+		secretCatalog.Reason = "Secret store is unavailable"
+	} else {
+		secretCatalog.Entries = entries
+	}
 	sort.Strings(warnings)
 	return dashboard.Snapshot{
 		GeneratedAt: generatedAt, Platform: doctorReport.Platform, Profile: doctorReport.Profile,
@@ -193,6 +200,7 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 		Workflows: workflowItems, WorkflowHistory: safeWorkflowHistory,
 		Contexts:  contexts,
 		Scheduler: service.schedulerSnapshot(),
+		Secrets:   secretCatalog,
 	}, nil
 }
 
@@ -340,7 +348,12 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 	if request.Environment != nil && request.Action != "update_environment" {
 		return dashboard.ActionResult{}, dashboardInvalid(fmt.Sprintf("%s does not accept environment mutation fields", request.Action))
 	}
+	if request.Secret != nil && request.Action != "update_secret" {
+		return dashboard.ActionResult{}, dashboardInvalid(fmt.Sprintf("%s does not accept Secret mutation fields", request.Action))
+	}
 	switch request.Action {
+	case "update_secret":
+		return service.updateSecret(request)
 	case "update_environment":
 		return service.updateEnvironment(request)
 	case "run_workflow":
@@ -575,6 +588,39 @@ func (service *dashboardService) updateEnvironment(request dashboard.ActionReque
 		return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusNotFound, Code: "ENVIRONMENT_NOT_FOUND", Message: fmt.Sprintf("environment %q was not found", mutation.ID)}
 	}
 	return dashboard.ActionResult{Message: fmt.Sprintf("updated environment %s (%s)", item.ID, mutation.Operation)}, nil
+}
+
+func (service *dashboardService) updateSecret(request dashboard.ActionRequest) (dashboard.ActionResult, error) {
+	mutation := request.Secret
+	if mutation == nil || mutation.Service == "" || mutation.Field == "" || request.ProjectID != "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" || request.SessionName != "" {
+		return dashboard.ActionResult{}, dashboardInvalid("update_secret requires only a typed Secret mutation")
+	}
+	store := secrets.NewStore(service.paths)
+	var err error
+	switch mutation.Operation {
+	case "set":
+		if mutation.Value == "" {
+			return dashboard.ActionResult{}, dashboardInvalid("set Secret mutation requires a value")
+		}
+		value := []byte(mutation.Value)
+		defer zeroBytes(value)
+		_, err = store.Set(mutation.Service, mutation.Field, value, mutation.Replace)
+	case "remove":
+		if mutation.Value != "" || mutation.Replace {
+			return dashboard.ActionResult{}, dashboardInvalid("remove Secret mutation accepts only service and field")
+		}
+		_, err = store.Remove(mutation.Service, mutation.Field)
+	default:
+		return dashboard.ActionResult{}, dashboardInvalid(fmt.Sprintf("unknown Secret operation %q", mutation.Operation))
+	}
+	if err != nil {
+		var notFound *secrets.NotFoundError
+		if errors.As(err, &notFound) {
+			return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusNotFound, Code: "SECRET_NOT_FOUND", Message: err.Error()}
+		}
+		return dashboard.ActionResult{}, dashboardCommandError(secretError(err))
+	}
+	return dashboard.ActionResult{Message: fmt.Sprintf("updated Secret %s/%s (%s)", mutation.Service, mutation.Field, mutation.Operation)}, nil
 }
 
 func (service *dashboardService) openProject(ctx context.Context, request dashboard.ActionRequest) (dashboard.ActionResult, error) {

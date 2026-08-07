@@ -249,6 +249,13 @@ h3 { font-size: 17px; margin-bottom: 0; }
 .row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row span { color: var(--muted); }
 .contexts-panel { grid-column: 1 / -1; }
+.secrets-panel { min-height: 0; margin-bottom: 28px; }
+.secrets-panel h2 { margin: 0; font-size: 22px; }
+.secrets-panel .context-secret-list { margin-top: 12px; }
+.secret-editor { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; }
+.secret-editor .secret-value-field { grid-column: auto; }
+.secret-editor .secret-replace { display: flex; flex-direction: row; align-items: center; align-self: center; gap: 7px; }
+.secret-editor .secret-replace input { width: auto; }
 .context-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .context-editor > strong { grid-column: 1 / -1; }
 .context-editor label { display: grid; gap: 4px; color: var(--muted); font-size: 10px; }
