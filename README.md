@@ -457,10 +457,11 @@ When started with `wb server start`, the Dashboard also shows the scheduler and
 its `environment-expiry-scan` job. The scan runs immediately and once per minute,
 reports expiry counts, and never deletes registry or Secret data.
 
-The selected-project Context panel is read-only. It shows the linked environment
-and AWS/Kubernetes metadata, ordinary export key names, and normalized secret
-reference health only; values, raw references, local secret paths, and Context
-mutation controls are not exposed.
+The selected-project Context panel can update AWS/Kubernetes metadata, expiry,
+ordinary exports, and Secret references through typed mutations. Existing
+ordinary values and raw `sec://` references are not returned to the browser;
+replacement values are write-only inputs. Secret plaintext, identity files, and
+store paths are never accepted or exposed by these actions.
 
 Use the **Theme** control to follow the operating-system appearance or select
 Light or Dark explicitly. The preference is stored only in browser localStorage.

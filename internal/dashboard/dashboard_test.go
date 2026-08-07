@@ -210,6 +210,23 @@ func TestHandlerAcceptsOnlyTypedWorkflowActionFields(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsUnknownNestedEnvironmentFields(t *testing.T) {
+	service := &fakeService{}
+	handler, err := NewHandler(service, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"action":"update_environment","environment":{"id":"dev","operation":"set_secret_reference","variable":"TOKEN","reference":"sec://service/token","plaintext":"must-not-be-accepted"}}`
+	request := httptest.NewRequest(http.MethodPost, "http://workbench.local/api/v1/actions", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Workbench-Token", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || service.actions.Load() != 0 {
+		t.Fatalf("unknown nested field was accepted: status=%d calls=%d", response.Code, service.actions.Load())
+	}
+}
+
 func TestSafeWorkflowRunOmitsCapturedOutput(t *testing.T) {
 	result := workflows.Result{ID: "run-1", WorkflowID: workflows.ProjectTest, ProjectID: "alpha", Status: workflows.Succeeded, Output: "SECRET_VALUE", OutputTruncated: true}
 	encoded, err := json.Marshal(SafeWorkflowRun(result))

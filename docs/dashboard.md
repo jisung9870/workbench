@@ -51,7 +51,7 @@ reachable address is not configurable.
 `GET /api/v1/snapshot` returns one schema-v1 Workbench envelope containing:
 
 - projects from the project store;
-- a read-only `contexts` projection with registry availability, environment metadata, project links, export key names,
+- a metadata-only `contexts` projection with registry availability, environment metadata, project links, export key names,
   and secret-reference availability status;
 - a live tmux session/window/pane hierarchy using stable tmux IDs and explicit
   managed, legacy, or foreign ownership;
@@ -85,9 +85,11 @@ For the selected project, the Context panel shows its default environment ID,
 AWS profile/region, Kubernetes context/namespace metadata, ordinary export key
 names, and each secret variable's availability status. It distinguishes an
 unavailable registry, an unlinked project, a missing linked environment, and
-unhealthy secret-reference states. The panel is read-only and never renders
-environment values, raw `sec://` references, secret plaintext, identity/store
-paths, or mutation controls.
+unhealthy secret-reference states. Typed forms can replace metadata, add or
+remove ordinary exports, add or remove Secret references, and set or clear
+expiry. Existing ordinary values and raw `sec://` references are never rendered;
+replacement values are write-only request fields. Secret plaintext and
+identity/store paths are neither accepted nor returned.
 
 ## Appearance
 
@@ -136,6 +138,7 @@ for narrow screens, and print styles remove the navigation chrome.
 | `attach_session` | `session_name` | exact session; non-interactive and therefore requires the server to run inside tmux |
 | `adopt_session` | `project_id` | legacy session only after registered name and canonical start path verification |
 | `stop_session` | `project_id` | re-reads complete Workbench ownership before killing the exact session |
+| `update_environment` | typed `environment` mutation | metadata, export, Secret reference, or expiry operation only; no plaintext Secret field |
 | `start_agent` | `project_id`, `agent_kind`, optional `backend` | detached tmux/cmux/Windows Terminal runtime |
 | `jump_agent` | `task_id` | registered active task only |
 | `stop_agent` | `task_id` | registered ownership revalidation; UI confirmation |

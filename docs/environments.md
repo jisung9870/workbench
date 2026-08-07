@@ -113,7 +113,10 @@ NUL-containing values fail before project code starts. Workflow state and API
 responses retain only the environment ID and the `resolve_secrets` request
 intent, never resolved values or reference details.
 
-Kubernetes context/namespace mutation and dedicated Dashboard
-environment/secret edit controls remain deferred.
+The Dashboard Context panel exposes typed Environment mutation controls. It can
+replace AWS/Kubernetes metadata, set or remove ordinary exports, set or remove
+`sec://` references, and manage expiry. Existing ordinary values and raw
+references are not loaded into the browser; replacement inputs are write-only.
+Secret plaintext editing remains a separate feature.
 Ordinary `exports` remain plaintext configuration and must not contain secret
 values.

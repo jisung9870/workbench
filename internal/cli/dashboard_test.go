@@ -182,6 +182,52 @@ func TestDashboardSessionActionsAreTypedAndNonInteractive(t *testing.T) {
 	}
 }
 
+func TestDashboardEnvironmentMutationsAreTypedAndAtomic(t *testing.T) {
+	root := t.TempDir()
+	paths := dashboardContextTestPaths(root)
+	store := environments.NewStore(paths)
+	if _, err := store.Add(environments.Environment{ID: "dev", Exports: map[string]string{"FEATURE": "before"}, Secrets: map[string]string{"TOKEN": "sec://service/token"}}); err != nil {
+		t.Fatal(err)
+	}
+	service := &dashboardService{paths: paths}
+	mutations := []*dashboard.EnvironmentMutation{
+		{ID: "dev", Operation: "metadata", AWSProfile: "sandbox", AWSRegion: "ap-northeast-2", KubeContext: "cluster", KubeNamespace: "tools"},
+		{ID: "dev", Operation: "set_export", Variable: "FEATURE", Value: "after"},
+		{ID: "dev", Operation: "set_secret_reference", Variable: "OTHER", Reference: "sec://service/other"},
+		{ID: "dev", Operation: "set_expiry", ExpiresAt: "2030-01-01T00:00:00Z"},
+		{ID: "dev", Operation: "remove_export", Variable: "FEATURE"},
+		{ID: "dev", Operation: "remove_secret_reference", Variable: "OTHER"},
+		{ID: "dev", Operation: "clear_expiry"},
+	}
+	for _, mutation := range mutations {
+		result, err := service.Execute(context.Background(), dashboard.ActionRequest{Action: "update_environment", Environment: mutation})
+		if err != nil || !strings.Contains(result.Message, mutation.Operation) {
+			t.Fatalf("mutation=%#v result=%#v err=%v", mutation, result, err)
+		}
+	}
+	item, found, err := store.Show("dev")
+	if err != nil || !found || item.AWSProfile != "sandbox" || item.ExpiresAt != nil || len(item.Exports) != 0 || len(item.Secrets) != 1 {
+		t.Fatalf("environment=%#v found=%v err=%v", item, found, err)
+	}
+}
+
+func TestDashboardEnvironmentMutationRejectsMixedAndSecretValueFields(t *testing.T) {
+	service := &dashboardService{}
+	tests := []dashboard.ActionRequest{
+		{Action: "jump_pane", PaneID: "%1", Environment: &dashboard.EnvironmentMutation{ID: "dev", Operation: "clear_expiry"}},
+		{Action: "update_environment", ProjectID: "alpha", Environment: &dashboard.EnvironmentMutation{ID: "dev", Operation: "clear_expiry"}},
+		{Action: "update_environment", Environment: &dashboard.EnvironmentMutation{ID: "dev", Operation: "set_secret_reference", Variable: "TOKEN", Reference: "sec://service/token", Value: "plaintext-must-not-be-accepted"}},
+		{Action: "update_environment", Environment: &dashboard.EnvironmentMutation{ID: "dev", Operation: "metadata", Variable: "EXTRA"}},
+	}
+	for _, request := range tests {
+		_, err := service.Execute(context.Background(), request)
+		var actionErr *dashboard.ActionError
+		if !errors.As(err, &actionErr) || actionErr.Code != "INVALID_ACTION" {
+			t.Fatalf("mixed mutation accepted: request=%#v err=%v", request, err)
+		}
+	}
+}
+
 func TestDashboardAdoptsAndStopsOnlyRegisteredProjectSessions(t *testing.T) {
 	root := t.TempDir()
 	projectPath := filepath.Join(root, "alpha")

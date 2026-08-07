@@ -125,15 +125,29 @@ type Snapshot struct {
 }
 
 type ActionRequest struct {
-	Action      string   `json:"action"`
-	ProjectID   string   `json:"project_id,omitempty"`
-	TaskID      string   `json:"task_id,omitempty"`
-	TaskIDs     []string `json:"task_ids,omitempty"`
-	AgentKind   string   `json:"agent_kind,omitempty"`
-	Backend     string   `json:"backend,omitempty"`
-	PaneID      string   `json:"pane_id,omitempty"`
-	WorkflowID  string   `json:"workflow_id,omitempty"`
-	SessionName string   `json:"session_name,omitempty"`
+	Action      string               `json:"action"`
+	ProjectID   string               `json:"project_id,omitempty"`
+	TaskID      string               `json:"task_id,omitempty"`
+	TaskIDs     []string             `json:"task_ids,omitempty"`
+	AgentKind   string               `json:"agent_kind,omitempty"`
+	Backend     string               `json:"backend,omitempty"`
+	PaneID      string               `json:"pane_id,omitempty"`
+	WorkflowID  string               `json:"workflow_id,omitempty"`
+	SessionName string               `json:"session_name,omitempty"`
+	Environment *EnvironmentMutation `json:"environment,omitempty"`
+}
+
+type EnvironmentMutation struct {
+	ID            string `json:"id"`
+	Operation     string `json:"operation"`
+	AWSProfile    string `json:"aws_profile,omitempty"`
+	AWSRegion     string `json:"aws_region,omitempty"`
+	KubeContext   string `json:"kube_context,omitempty"`
+	KubeNamespace string `json:"kube_namespace,omitempty"`
+	Variable      string `json:"variable,omitempty"`
+	Value         string `json:"value,omitempty"`
+	Reference     string `json:"reference,omitempty"`
+	ExpiresAt     string `json:"expires_at,omitempty"`
 }
 
 type ActionResult struct {

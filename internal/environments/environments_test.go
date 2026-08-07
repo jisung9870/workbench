@@ -113,6 +113,43 @@ func TestExpiryStatesAndStoreRenewal(t *testing.T) {
 	}
 }
 
+func TestStoreTypedMutationsPreserveVariableBoundaries(t *testing.T) {
+	paths := testPaths(t.TempDir())
+	store := NewStore(paths)
+	if _, err := store.Add(Environment{ID: "dev", Exports: map[string]string{"FEATURE": "before"}, Secrets: map[string]string{"TOKEN": "sec://service/token"}}); err != nil {
+		t.Fatal(err)
+	}
+	item, found, _, err := store.UpdateMetadata("dev", Metadata{AWSProfile: "sandbox", AWSRegion: "ap-northeast-2", KubeContext: "cluster", KubeNamespace: "tools"})
+	if err != nil || !found || item.AWSProfile != "sandbox" || item.KubeNamespace != "tools" {
+		t.Fatalf("metadata=%#v found=%v err=%v", item, found, err)
+	}
+	item, _, _, err = store.SetExport("dev", "FEATURE", "after")
+	if err != nil || item.Exports["FEATURE"] != "after" {
+		t.Fatalf("export=%#v err=%v", item, err)
+	}
+	if _, _, _, err := store.SetExport("dev", "TOKEN", "unsafe"); err == nil {
+		t.Fatal("ordinary export replaced Secret reference")
+	}
+	if _, _, _, err := store.SetExport("dev", "BROKEN", "before\x00after"); err == nil {
+		t.Fatal("NUL-containing export was stored")
+	}
+	item, _, _, err = store.SetSecretReference("dev", "OTHER", "sec://service/other")
+	if err != nil || item.Secrets["OTHER"] != "sec://service/other" {
+		t.Fatalf("reference=%#v err=%v", item, err)
+	}
+	if _, _, _, err := store.SetSecretReference("dev", "FEATURE", "sec://service/feature"); err == nil {
+		t.Fatal("Secret reference replaced ordinary export")
+	}
+	item, _, _, err = store.RemoveExport("dev", "FEATURE")
+	if err != nil || len(item.Exports) != 0 {
+		t.Fatalf("remove export=%#v err=%v", item, err)
+	}
+	item, _, _, err = store.RemoveSecretReference("dev", "OTHER")
+	if err != nil || len(item.Secrets) != 1 || item.Secrets["TOKEN"] == "" {
+		t.Fatalf("remove reference=%#v err=%v", item, err)
+	}
+}
+
 func TestStoreRejectsConflictWithoutChangingRegistry(t *testing.T) {
 	paths := testPaths(t.TempDir())
 	store := NewStore(paths)

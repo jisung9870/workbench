@@ -337,7 +337,12 @@ func (service *dashboardService) sessionManager(executor backend.Executor) sessi
 }
 
 func (service *dashboardService) Execute(ctx context.Context, request dashboard.ActionRequest) (dashboard.ActionResult, error) {
+	if request.Environment != nil && request.Action != "update_environment" {
+		return dashboard.ActionResult{}, dashboardInvalid(fmt.Sprintf("%s does not accept environment mutation fields", request.Action))
+	}
 	switch request.Action {
+	case "update_environment":
+		return service.updateEnvironment(request)
 	case "run_workflow":
 		if request.ProjectID == "" || request.WorkflowID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.SessionName != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("run_workflow requires only project_id and workflow_id")
@@ -506,6 +511,70 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 	default:
 		return dashboard.ActionResult{}, dashboardInvalid(fmt.Sprintf("unknown dashboard action %q", request.Action))
 	}
+}
+
+func (service *dashboardService) updateEnvironment(request dashboard.ActionRequest) (dashboard.ActionResult, error) {
+	mutation := request.Environment
+	if mutation == nil || mutation.ID == "" || request.ProjectID != "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" || request.SessionName != "" {
+		return dashboard.ActionResult{}, dashboardInvalid("update_environment requires only a typed environment mutation")
+	}
+	metadataEmpty := mutation.AWSProfile == "" && mutation.AWSRegion == "" && mutation.KubeContext == "" && mutation.KubeNamespace == ""
+	store := environments.NewStore(service.paths)
+	var (
+		item  environments.Environment
+		found bool
+		err   error
+	)
+	switch mutation.Operation {
+	case "metadata":
+		if mutation.Variable != "" || mutation.Value != "" || mutation.Reference != "" || mutation.ExpiresAt != "" {
+			return dashboard.ActionResult{}, dashboardInvalid("metadata mutation accepts only AWS and Kubernetes metadata")
+		}
+		item, found, _, err = store.UpdateMetadata(mutation.ID, environments.Metadata{AWSProfile: mutation.AWSProfile, AWSRegion: mutation.AWSRegion, KubeContext: mutation.KubeContext, KubeNamespace: mutation.KubeNamespace})
+	case "set_export":
+		if mutation.Variable == "" || mutation.Reference != "" || mutation.ExpiresAt != "" || !metadataEmpty {
+			return dashboard.ActionResult{}, dashboardInvalid("set_export requires only variable and value")
+		}
+		item, found, _, err = store.SetExport(mutation.ID, mutation.Variable, mutation.Value)
+	case "remove_export":
+		if mutation.Variable == "" || mutation.Value != "" || mutation.Reference != "" || mutation.ExpiresAt != "" || !metadataEmpty {
+			return dashboard.ActionResult{}, dashboardInvalid("remove_export requires only variable")
+		}
+		item, found, _, err = store.RemoveExport(mutation.ID, mutation.Variable)
+	case "set_secret_reference":
+		if mutation.Variable == "" || mutation.Reference == "" || mutation.Value != "" || mutation.ExpiresAt != "" || !metadataEmpty {
+			return dashboard.ActionResult{}, dashboardInvalid("set_secret_reference requires only variable and reference")
+		}
+		item, found, _, err = store.SetSecretReference(mutation.ID, mutation.Variable, mutation.Reference)
+	case "remove_secret_reference":
+		if mutation.Variable == "" || mutation.Value != "" || mutation.Reference != "" || mutation.ExpiresAt != "" || !metadataEmpty {
+			return dashboard.ActionResult{}, dashboardInvalid("remove_secret_reference requires only variable")
+		}
+		item, found, _, err = store.RemoveSecretReference(mutation.ID, mutation.Variable)
+	case "set_expiry":
+		if mutation.ExpiresAt == "" || mutation.Variable != "" || mutation.Value != "" || mutation.Reference != "" || !metadataEmpty {
+			return dashboard.ActionResult{}, dashboardInvalid("set_expiry requires only expires_at")
+		}
+		expiresAt, parseErr := time.Parse(time.RFC3339, mutation.ExpiresAt)
+		if parseErr != nil {
+			return dashboard.ActionResult{}, dashboardInvalid("expires_at must be RFC3339")
+		}
+		item, found, _, err = store.SetExpiry(mutation.ID, &expiresAt)
+	case "clear_expiry":
+		if mutation.ExpiresAt != "" || mutation.Variable != "" || mutation.Value != "" || mutation.Reference != "" || !metadataEmpty {
+			return dashboard.ActionResult{}, dashboardInvalid("clear_expiry accepts no mutation values")
+		}
+		item, found, _, err = store.SetExpiry(mutation.ID, nil)
+	default:
+		return dashboard.ActionResult{}, dashboardInvalid(fmt.Sprintf("unknown environment operation %q", mutation.Operation))
+	}
+	if err != nil {
+		return dashboard.ActionResult{}, dashboardCommandError(envError(err))
+	}
+	if !found {
+		return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusNotFound, Code: "ENVIRONMENT_NOT_FOUND", Message: fmt.Sprintf("environment %q was not found", mutation.ID)}
+	}
+	return dashboard.ActionResult{Message: fmt.Sprintf("updated environment %s (%s)", item.ID, mutation.Operation)}, nil
 }
 
 func (service *dashboardService) openProject(ctx context.Context, request dashboard.ActionRequest) (dashboard.ActionResult, error) {

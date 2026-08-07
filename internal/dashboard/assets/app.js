@@ -39,7 +39,14 @@ async function load() {
   }
 }
 
-async function action(payload) {
+let actionQueue = Promise.resolve();
+
+function action(payload) {
+  actionQueue = actionQueue.then(() => performAction(payload), () => performAction(payload));
+  return actionQueue;
+}
+
+async function performAction(payload) {
   try {
     const response = await fetch("/api/v1/actions", {
       method: "POST",
@@ -184,7 +191,53 @@ function renderContexts(contexts, project) {
     ["Kubernetes namespace", environment.kube_namespace || "Not set"],
     ["Expiry", expiry.expires_at ? `${expiry.status} · ${new Date(expiry.expires_at).toLocaleString()}` : "Permanent"],
   ];
-  target.innerHTML = `<dl class="context-metadata">${metadata.map(([label, value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join("")}</dl><div class="context-group"><strong>Export keys</strong>${exportKeys.length ? `<div class="context-tags">${exportKeys.map(key => `<code>${esc(key)}</code>`).join("")}</div>` : '<p>No ordinary export keys</p>'}</div><div class="context-group"><strong>Secret references</strong>${secretReferences.length ? `<div class="context-secret-list">${secretReferences.map(item => `<div><code>${esc(item.variable)}</code><span class="status ${esc(item.status)}">${esc(item.status)}</span></div>`).join("")}</div>` : '<p>No secret references</p>'}</div>`;
+  const expiryValue = expiry.expires_at ? localDateTimeValue(new Date(expiry.expires_at)) : "";
+  target.innerHTML = `<dl class="context-metadata">${metadata.map(([label, value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join("")}</dl><form id="context-metadata-form" class="context-editor"><strong>Metadata</strong><label>AWS profile<input name="aws_profile" value="${esc(environment.aws_profile || "")}"></label><label>AWS region<input name="aws_region" value="${esc(environment.aws_region || "")}"></label><label>Kubernetes context<input name="kube_context" value="${esc(environment.kube_context || "")}"></label><label>Kubernetes namespace<input name="kube_namespace" value="${esc(environment.kube_namespace || "")}"></label><button type="submit">Save metadata</button></form><form id="context-expiry-form" class="context-editor inline"><label>Expires at<input name="expires_at" type="datetime-local" value="${esc(expiryValue)}" required></label><button type="submit">Set expiry</button><button type="button" id="context-expiry-clear">Clear</button></form><div class="context-group"><strong>Ordinary exports</strong>${exportKeys.length ? `<div class="context-secret-list">${exportKeys.map(key => `<div><code>${esc(key)}</code><button type="button" data-environment-operation="remove_export" data-variable="${esc(key)}">Remove</button></div>`).join("")}</div>` : '<p>No ordinary export keys</p>'}<form id="context-export-form" class="context-editor inline"><label>Variable<input name="variable" pattern="[A-Za-z_][A-Za-z0-9_]*" required></label><label>Value<input name="value"></label><button type="submit">Set export</button></form></div><div class="context-group"><strong>Secret references</strong>${secretReferences.length ? `<div class="context-secret-list">${secretReferences.map(item => `<div><code>${esc(item.variable)}</code><span class="status ${esc(item.status)}">${esc(item.status)}</span><button type="button" data-environment-operation="remove_secret_reference" data-variable="${esc(item.variable)}">Remove</button></div>`).join("")}</div>` : '<p>No secret references</p>'}<form id="context-secret-form" class="context-editor inline"><label>Variable<input name="variable" pattern="[A-Za-z_][A-Za-z0-9_]*" required></label><label>Reference<input name="reference" placeholder="sec://service/field" required></label><button type="submit">Set reference</button></form></div>`;
+  bindContextEditor(environment.id);
+}
+
+function localDateTimeValue(date) {
+  const pad = value => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function bindContextEditor(environmentId) {
+  const mutate = environment => action({ action: "update_environment", environment: { id: environmentId, ...environment } });
+  const metadataForm = $("context-metadata-form");
+  const expiryForm = $("context-expiry-form");
+  const expiryClear = $("context-expiry-clear");
+  const exportForm = $("context-export-form");
+  const secretForm = $("context-secret-form");
+  if (!metadataForm || !expiryForm || !expiryClear || !exportForm || !secretForm) return;
+  metadataForm.onsubmit = event => {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    mutate({ operation: "metadata", aws_profile: values.get("aws_profile"), aws_region: values.get("aws_region"), kube_context: values.get("kube_context"), kube_namespace: values.get("kube_namespace") });
+  };
+  expiryForm.onsubmit = event => {
+    event.preventDefault();
+    const value = new FormData(event.currentTarget).get("expires_at");
+    const expiresAt = new Date(value);
+    if (Number.isNaN(expiresAt.getTime())) return notice("Expiry time is invalid", true);
+    mutate({ operation: "set_expiry", expires_at: expiresAt.toISOString() });
+  };
+  expiryClear.onclick = () => mutate({ operation: "clear_expiry" });
+  exportForm.onsubmit = event => {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    mutate({ operation: "set_export", variable: values.get("variable"), value: values.get("value") });
+  };
+  secretForm.onsubmit = event => {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    mutate({ operation: "set_secret_reference", variable: values.get("variable"), reference: values.get("reference") });
+  };
+  document.querySelectorAll("[data-environment-operation]").forEach(button => {
+    button.onclick = () => {
+      if (!window.confirm(`${button.dataset.environmentOperation === "remove_export" ? "Remove export" : "Remove Secret reference"} ${button.dataset.variable}?`)) return;
+      mutate({ operation: button.dataset.environmentOperation, variable: button.dataset.variable });
+    };
+  });
 }
 
 function renderScheduler(scheduler) {

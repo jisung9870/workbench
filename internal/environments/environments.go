@@ -69,6 +69,13 @@ type Registry struct {
 
 type Store struct{ paths config.Paths }
 
+type Metadata struct {
+	AWSProfile    string
+	AWSRegion     string
+	KubeContext   string
+	KubeNamespace string
+}
+
 type InvalidError struct{ Message string }
 
 func (e *InvalidError) Error() string { return e.Message }
@@ -167,6 +174,77 @@ func (s *Store) Remove(id string) (Environment, bool, string, error) {
 }
 
 func (s *Store) SetExpiry(id string, expiresAt *time.Time) (Environment, bool, string, error) {
+	return s.mutate(id, func(environment *Environment) error {
+		if expiresAt == nil {
+			environment.ExpiresAt = nil
+		} else {
+			utc := expiresAt.UTC()
+			environment.ExpiresAt = &utc
+		}
+		return nil
+	})
+}
+
+func (s *Store) UpdateMetadata(id string, metadata Metadata) (Environment, bool, string, error) {
+	return s.mutate(id, func(environment *Environment) error {
+		environment.AWSProfile = metadata.AWSProfile
+		environment.AWSRegion = metadata.AWSRegion
+		environment.KubeContext = metadata.KubeContext
+		environment.KubeNamespace = metadata.KubeNamespace
+		return nil
+	})
+}
+
+func (s *Store) SetExport(id, key, value string) (Environment, bool, string, error) {
+	return s.mutate(id, func(environment *Environment) error {
+		if !ValidVariableName(key) || ReservedKey(key) {
+			return &InvalidError{Message: fmt.Sprintf("export key %q is invalid or reserved", key)}
+		}
+		if _, exists := environment.Secrets[key]; exists {
+			return &ConflictError{Message: fmt.Sprintf("environment %q variable %q is already a Secret reference", id, key)}
+		}
+		environment.Exports[key] = value
+		return nil
+	})
+}
+
+func (s *Store) RemoveExport(id, key string) (Environment, bool, string, error) {
+	return s.mutate(id, func(environment *Environment) error {
+		if _, exists := environment.Exports[key]; !exists {
+			return &ConflictError{Message: fmt.Sprintf("environment %q export %q is not present", id, key)}
+		}
+		delete(environment.Exports, key)
+		return nil
+	})
+}
+
+func (s *Store) SetSecretReference(id, key, reference string) (Environment, bool, string, error) {
+	return s.mutate(id, func(environment *Environment) error {
+		if !ValidVariableName(key) || ReservedKey(key) {
+			return &InvalidError{Message: fmt.Sprintf("Secret variable %q is invalid or reserved", key)}
+		}
+		if _, err := ParseSecretReference(reference); err != nil {
+			return &InvalidError{Message: fmt.Sprintf("Secret reference for %q is invalid: %v", key, err)}
+		}
+		if _, exists := environment.Exports[key]; exists {
+			return &ConflictError{Message: fmt.Sprintf("environment %q variable %q is already an ordinary export", id, key)}
+		}
+		environment.Secrets[key] = reference
+		return nil
+	})
+}
+
+func (s *Store) RemoveSecretReference(id, key string) (Environment, bool, string, error) {
+	return s.mutate(id, func(environment *Environment) error {
+		if _, exists := environment.Secrets[key]; !exists {
+			return &ConflictError{Message: fmt.Sprintf("environment %q Secret reference %q is not present", id, key)}
+		}
+		delete(environment.Secrets, key)
+		return nil
+	})
+}
+
+func (s *Store) mutate(id string, mutation func(*Environment) error) (Environment, bool, string, error) {
 	registry, err := s.Load()
 	if err != nil {
 		return Environment{}, false, "", err
@@ -175,11 +253,8 @@ func (s *Store) SetExpiry(id string, expiresAt *time.Time) (Environment, bool, s
 		if registry.Environments[index].ID != id {
 			continue
 		}
-		if expiresAt == nil {
-			registry.Environments[index].ExpiresAt = nil
-		} else {
-			utc := expiresAt.UTC()
-			registry.Environments[index].ExpiresAt = &utc
+		if err := mutation(&registry.Environments[index]); err != nil {
+			return Environment{}, true, "", err
 		}
 		backup, saveErr := s.Save(registry)
 		return registry.Environments[index], true, backup, saveErr
@@ -239,12 +314,20 @@ func ValidateRegistry(registry Registry) error {
 		if environment.ExpiresAt != nil && environment.ExpiresAt.IsZero() {
 			return &InvalidError{Message: fmt.Sprintf("environment %q expires_at must be a valid timestamp", environment.ID)}
 		}
-		for key := range environment.Exports {
+		for field, value := range map[string]string{"aws_profile": environment.AWSProfile, "aws_region": environment.AWSRegion, "kube_context": environment.KubeContext, "kube_namespace": environment.KubeNamespace} {
+			if strings.IndexByte(value, 0) >= 0 {
+				return &InvalidError{Message: fmt.Sprintf("environment %q %s contains NUL", environment.ID, field)}
+			}
+		}
+		for key, value := range environment.Exports {
 			if !ValidVariableName(key) {
 				return &InvalidError{Message: fmt.Sprintf("environment %q export key %q is invalid", environment.ID, key)}
 			}
 			if ReservedKey(key) {
 				return &InvalidError{Message: fmt.Sprintf("environment %q export key %q must use its dedicated field", environment.ID, key)}
+			}
+			if strings.IndexByte(value, 0) >= 0 {
+				return &InvalidError{Message: fmt.Sprintf("environment %q export %q contains NUL", environment.ID, key)}
 			}
 		}
 		for key, reference := range environment.Secrets {

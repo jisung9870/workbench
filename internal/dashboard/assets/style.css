@@ -249,6 +249,13 @@ h3 { font-size: 17px; margin-bottom: 0; }
 .row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row span { color: var(--muted); }
 .contexts-panel { grid-column: 1 / -1; }
+.context-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.context-editor > strong { grid-column: 1 / -1; }
+.context-editor label { display: grid; gap: 4px; color: var(--muted); font-size: 10px; }
+.context-editor input { width: 100%; min-width: 0; padding: 8px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.context-editor button { justify-self: start; }
+.context-editor.inline { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; }
+.context-secret-list button { padding: 4px 7px; font-size: 9px; }
 .context-body { display: grid; grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1fr) minmax(0, 1fr); gap: 18px; margin-top: 14px; }
 .context-state { grid-column: 1 / -1; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .context-state.error { border-color: var(--danger-line); background: var(--danger-soft); }
@@ -414,6 +421,7 @@ td { color: var(--muted); }
   .hero-actions { justify-content: flex-start; }
   .metrics { grid-template-columns: 1fr; }
   .context-body { grid-template-columns: 1fr; }
+  .context-editor, .context-editor.inline { grid-template-columns: 1fr; }
   .grid { display: block; }
   .panel { margin-bottom: 12px; }
   .cards { grid-template-columns: 1fr; }
