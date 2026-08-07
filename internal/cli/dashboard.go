@@ -29,6 +29,7 @@ import (
 	"github.com/jisung9870/workbench/internal/environments"
 	"github.com/jisung9870/workbench/internal/overview"
 	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/scheduler"
 	"github.com/jisung9870/workbench/internal/secrets"
 	sessionstate "github.com/jisung9870/workbench/internal/sessions"
 	"github.com/jisung9870/workbench/internal/tasks"
@@ -42,6 +43,11 @@ type dashboardService struct {
 	executor  backend.Executor
 	workflows workflowRuntime
 	sessions  sessionRuntime
+	scheduler schedulerRuntime
+}
+
+type schedulerRuntime interface {
+	Snapshot() scheduler.Snapshot
 }
 
 type sessionRuntime interface {
@@ -185,8 +191,16 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 		Doctor: doctorReport, Warnings: warnings,
 		Tmux: tmuxSnapshot, Tasks: unifiedTasks, Overview: overviewSummary, ToolHealth: toolHealth,
 		Workflows: workflowItems, WorkflowHistory: safeWorkflowHistory,
-		Contexts: contexts,
+		Contexts:  contexts,
+		Scheduler: service.schedulerSnapshot(),
 	}, nil
+}
+
+func (service *dashboardService) schedulerSnapshot() scheduler.Snapshot {
+	if service.scheduler == nil {
+		return scheduler.Unavailable("background server scheduler is not active")
+	}
+	return service.scheduler.Snapshot()
 }
 
 func buildDashboardContexts(paths config.Paths, projectItems []projects.Project) (dashboard.Contexts, []string) {
@@ -226,6 +240,17 @@ func projectDashboardContexts(items []environments.Environment, projectItems []p
 		}
 	}
 	for _, item := range items {
+		expiry := environments.ExpiryAt(item, time.Now())
+		switch expiry.Status {
+		case environments.ExpiryPermanent:
+			result.Summary.Permanent++
+		case environments.ExpiryActive:
+			result.Summary.Active++
+		case environments.ExpiryExpiring:
+			result.Summary.Expiring++
+		case environments.ExpiryExpired:
+			result.Summary.Expired++
+		}
 		exportKeys := make([]string, 0, len(item.Exports))
 		for key := range item.Exports {
 			exportKeys = append(exportKeys, key)
@@ -256,6 +281,7 @@ func projectDashboardContexts(items []environments.Environment, projectItems []p
 			ID: item.ID, AWSProfile: item.AWSProfile, AWSRegion: item.AWSRegion,
 			KubeContext: item.KubeContext, KubeNamespace: item.KubeNamespace,
 			ExportKeys: exportKeys, ProjectIDs: projectLinks, SecretReferences: references,
+			Expiry: expiry,
 		})
 		result.Summary.SecretReferences += len(references)
 	}

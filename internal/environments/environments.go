@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/jisung9870/workbench/internal/config"
@@ -23,6 +24,42 @@ type Environment struct {
 	KubeNamespace string            `toml:"kube_namespace,omitempty" json:"kube_namespace,omitempty"`
 	Exports       map[string]string `toml:"exports,omitempty" json:"exports"`
 	Secrets       map[string]string `toml:"secrets,omitempty" json:"secrets"`
+	ExpiresAt     *time.Time        `toml:"expires_at,omitempty" json:"expires_at,omitempty"`
+}
+
+const ExpiringWindow = 24 * time.Hour
+
+type ExpiryStatus string
+
+const (
+	ExpiryPermanent ExpiryStatus = "permanent"
+	ExpiryActive    ExpiryStatus = "active"
+	ExpiryExpiring  ExpiryStatus = "expiring"
+	ExpiryExpired   ExpiryStatus = "expired"
+)
+
+type Expiry struct {
+	Status           ExpiryStatus `json:"status"`
+	ExpiresAt        *time.Time   `json:"expires_at,omitempty"`
+	RemainingSeconds int64        `json:"remaining_seconds,omitempty"`
+}
+
+func ExpiryAt(environment Environment, now time.Time) Expiry {
+	if environment.ExpiresAt == nil {
+		return Expiry{Status: ExpiryPermanent}
+	}
+	expiresAt := environment.ExpiresAt.UTC()
+	result := Expiry{Status: ExpiryActive, ExpiresAt: &expiresAt}
+	remaining := expiresAt.Sub(now.UTC())
+	if remaining <= 0 {
+		result.Status = ExpiryExpired
+		return result
+	}
+	result.RemainingSeconds = int64(remaining / time.Second)
+	if remaining <= ExpiringWindow {
+		result.Status = ExpiryExpiring
+	}
+	return result
 }
 
 type Registry struct {
@@ -129,6 +166,27 @@ func (s *Store) Remove(id string) (Environment, bool, string, error) {
 	return Environment{}, false, "", nil
 }
 
+func (s *Store) SetExpiry(id string, expiresAt *time.Time) (Environment, bool, string, error) {
+	registry, err := s.Load()
+	if err != nil {
+		return Environment{}, false, "", err
+	}
+	for index := range registry.Environments {
+		if registry.Environments[index].ID != id {
+			continue
+		}
+		if expiresAt == nil {
+			registry.Environments[index].ExpiresAt = nil
+		} else {
+			utc := expiresAt.UTC()
+			registry.Environments[index].ExpiresAt = &utc
+		}
+		backup, saveErr := s.Save(registry)
+		return registry.Environments[index], true, backup, saveErr
+	}
+	return Environment{}, false, "", nil
+}
+
 func (s *Store) Save(registry Registry) (string, error) {
 	for i := range registry.Environments {
 		registry.Environments[i] = normalized(registry.Environments[i])
@@ -178,6 +236,9 @@ func ValidateRegistry(registry Registry) error {
 			return &ConflictError{Message: fmt.Sprintf("duplicate environment id %q", environment.ID)}
 		}
 		ids[environment.ID] = struct{}{}
+		if environment.ExpiresAt != nil && environment.ExpiresAt.IsZero() {
+			return &InvalidError{Message: fmt.Sprintf("environment %q expires_at must be a valid timestamp", environment.ID)}
+		}
 		for key := range environment.Exports {
 			if !ValidVariableName(key) {
 				return &InvalidError{Message: fmt.Sprintf("environment %q export key %q is invalid", environment.ID, key)}
@@ -278,6 +339,10 @@ func normalized(environment Environment) Environment {
 	}
 	if environment.Secrets == nil {
 		environment.Secrets = map[string]string{}
+	}
+	if environment.ExpiresAt != nil {
+		utc := environment.ExpiresAt.UTC()
+		environment.ExpiresAt = &utc
 	}
 	return environment
 }

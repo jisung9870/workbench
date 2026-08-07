@@ -20,7 +20,9 @@ import (
 	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/dashboard"
+	"github.com/jisung9870/workbench/internal/environments"
 	"github.com/jisung9870/workbench/internal/output"
+	"github.com/jisung9870/workbench/internal/scheduler"
 	"github.com/jisung9870/workbench/internal/storage"
 )
 
@@ -60,27 +62,30 @@ type serverState struct {
 }
 
 type serverStatusView struct {
-	Status    string    `json:"status"`
-	PID       int       `json:"pid,omitempty"`
-	URL       string    `json:"url,omitempty"`
-	StartedAt time.Time `json:"started_at,omitempty"`
-	StateFile string    `json:"state_file"`
-	LogFile   string    `json:"log_file,omitempty"`
+	Status    string             `json:"status"`
+	PID       int                `json:"pid,omitempty"`
+	URL       string             `json:"url,omitempty"`
+	StartedAt time.Time          `json:"started_at,omitempty"`
+	StateFile string             `json:"state_file"`
+	LogFile   string             `json:"log_file,omitempty"`
+	Scheduler scheduler.Snapshot `json:"scheduler"`
 }
 
 type serverProbe struct {
-	SchemaVersion int       `json:"schema_version"`
-	InstanceID    string    `json:"instance_id"`
-	PID           int       `json:"pid"`
-	URL           string    `json:"url"`
-	StartedAt     time.Time `json:"started_at"`
+	SchemaVersion int                `json:"schema_version"`
+	InstanceID    string             `json:"instance_id"`
+	PID           int                `json:"pid"`
+	URL           string             `json:"url"`
+	StartedAt     time.Time          `json:"started_at"`
+	Scheduler     scheduler.Snapshot `json:"scheduler"`
 }
 
 type serverControlHandler struct {
-	next   http.Handler
-	probe  serverProbe
-	token  string
-	cancel context.CancelFunc
+	next      http.Handler
+	probe     serverProbe
+	token     string
+	cancel    context.CancelFunc
+	scheduler schedulerRuntime
 }
 
 func runServer(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
@@ -308,7 +313,7 @@ func runServerServe(args []string, paths config.Paths, stdout, stderr io.Writer)
 		_ = removeServerState(statePath, state.InstanceID)
 		return generalError(err)
 	}
-	handler, err := dashboard.NewHandler(&dashboardService{paths: paths}, token)
+	runner, err := scheduler.New(scheduler.NewEnvironmentExpiryJob(environments.NewStore(paths), time.Minute))
 	if err != nil {
 		_ = listener.Close()
 		_ = removeServerState(statePath, state.InstanceID)
@@ -316,6 +321,12 @@ func runServerServe(args []string, paths config.Paths, stdout, stderr io.Writer)
 	}
 	ctx, cancel := serverSignalContext(context.Background())
 	defer cancel()
+	handler, err := dashboard.NewHandler(&dashboardService{paths: paths, scheduler: runner}, token)
+	if err != nil {
+		_ = listener.Close()
+		_ = removeServerState(statePath, state.InstanceID)
+		return generalError(err)
+	}
 	state.Status = serverStatusRunning
 	state.PID = os.Getpid()
 	state.URL = dashboard.URL(listener)
@@ -325,7 +336,8 @@ func runServerServe(args []string, paths config.Paths, stdout, stderr io.Writer)
 	}
 	defer func() { _ = removeServerState(statePath, state.InstanceID) }()
 	probe := serverProbe{SchemaVersion: serverSchemaVersion, InstanceID: state.InstanceID, PID: state.PID, URL: state.URL, StartedAt: state.StartedAt}
-	managed := &serverControlHandler{next: handler, probe: probe, token: state.ControlToken, cancel: cancel}
+	managed := &serverControlHandler{next: handler, probe: probe, token: state.ControlToken, cancel: cancel, scheduler: runner}
+	go runner.Run(ctx)
 	fmt.Fprintf(stdout, "Workbench server started pid=%d url=%s\n", state.PID, state.URL)
 	if err := dashboard.Serve(ctx, listener, managed); err != nil {
 		fmt.Fprintf(stderr, "Workbench server failed: %v\n", err)
@@ -346,7 +358,11 @@ func (handler *serverControlHandler) ServeHTTP(writer http.ResponseWriter, reque
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(writer).Encode(handler.probe)
+		probe := handler.probe
+		if handler.scheduler != nil {
+			probe.Scheduler = handler.scheduler.Snapshot()
+		}
+		_ = json.NewEncoder(writer).Encode(probe)
 	case "/api/v1/server/stop":
 		if request.Method != http.MethodPost {
 			writer.Header().Set("Allow", http.MethodPost)
@@ -503,11 +519,12 @@ func removeServerState(path, instanceID string) error {
 }
 
 func inspectServer(ctx context.Context, statePath string, state serverState) serverStatusView {
-	view := serverStatusView{Status: state.Status, PID: state.PID, URL: state.URL, StartedAt: state.StartedAt, StateFile: statePath, LogFile: state.LogPath}
+	view := serverStatusView{Status: state.Status, PID: state.PID, URL: state.URL, StartedAt: state.StartedAt, StateFile: statePath, LogFile: state.LogPath, Scheduler: scheduler.Unavailable("server scheduler is unavailable")}
 	if state.Status == serverStatusRunning {
 		probe, err := probeServer(ctx, state)
 		if err == nil && probe.InstanceID == state.InstanceID && probe.PID == state.PID {
 			view.Status = serverStatusRunning
+			view.Scheduler = probe.Scheduler
 			return view
 		}
 	}
@@ -596,6 +613,9 @@ func resolveServerEndpoint(baseURL, relative string) (string, error) {
 }
 
 func writeServerStatus(stdout, stderr io.Writer, options map[string]string, view serverStatusView, warnings []string) *commandError {
+	if view.Scheduler.Jobs == nil {
+		view.Scheduler = scheduler.Unavailable("server is not running")
+	}
 	if _, jsonMode := options["--json"]; jsonMode {
 		if err := output.Write(stdout, map[string]any{"server": view}, warnings); err != nil {
 			return generalError(err)
@@ -618,6 +638,16 @@ func writeServerStatus(stdout, stderr io.Writer, options map[string]string, view
 	fmt.Fprintf(stdout, "state_file: %s\n", view.StateFile)
 	if view.LogFile != "" {
 		fmt.Fprintf(stdout, "log_file: %s\n", view.LogFile)
+	}
+	if view.Scheduler.Available {
+		status := "stopped"
+		if view.Scheduler.Running {
+			status = "running"
+		}
+		fmt.Fprintf(stdout, "scheduler: %s\n", status)
+		for _, job := range view.Scheduler.Jobs {
+			fmt.Fprintf(stdout, "scheduler_job: %s\t%s\t%s\n", job.ID, job.Status, job.NextRunAt.Format(time.RFC3339))
+		}
 	}
 	return nil
 }

@@ -277,10 +277,12 @@ func TestDashboardContextsAreSortedLinkedAndMetadataOnly(t *testing.T) {
 	if _, err := environmentStore.Add(environments.Environment{ID: "zeta", Exports: map[string]string{}, Secrets: map[string]string{}}); err != nil {
 		t.Fatal(err)
 	}
+	expiredAt := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	if _, err := environmentStore.Add(environments.Environment{
 		ID: "alpha", AWSProfile: "sandbox", AWSRegion: "ap-northeast-2", KubeContext: "cluster", KubeNamespace: "tools",
-		Exports: map[string]string{"ZED": ordinarySentinel, "ALPHA": "ordinary"},
-		Secrets: map[string]string{"TOKEN": "sec://service/token", "MISSING": "sec://service/missing"},
+		Exports:   map[string]string{"ZED": ordinarySentinel, "ALPHA": "ordinary"},
+		Secrets:   map[string]string{"TOKEN": "sec://service/token", "MISSING": "sec://service/missing"},
+		ExpiresAt: &expiredAt,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -318,6 +320,9 @@ func TestDashboardContextsAreSortedLinkedAndMetadataOnly(t *testing.T) {
 	}
 	if len(alpha.SecretReferences) != 2 || alpha.SecretReferences[0].Variable != "MISSING" || alpha.SecretReferences[0].Status != "missing" || alpha.SecretReferences[1].Variable != "TOKEN" || alpha.SecretReferences[1].Status != "available" {
 		t.Fatalf("secret references=%#v", alpha.SecretReferences)
+	}
+	if alpha.Expiry.Status != environments.ExpiryExpired || contexts.Summary.Expired != 1 || contexts.Summary.Permanent != 1 {
+		t.Fatalf("expiry=%#v summary=%#v", alpha.Expiry, contexts.Summary)
 	}
 	if contexts.Summary.Environments != 2 || contexts.Summary.LinkedProjects != 2 || contexts.Summary.SecretReferences != 2 || contexts.Summary.Available != 1 || contexts.Summary.Missing != 1 {
 		t.Fatalf("summary=%#v", contexts.Summary)

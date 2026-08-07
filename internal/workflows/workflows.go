@@ -475,6 +475,9 @@ func (m *Manager) preflightEnvironment(project projects.Project, options RunOpti
 	if !found {
 		return "", &NotFoundError{Message: fmt.Sprintf("environment %q was not found", environmentID)}
 	}
+	if expiry := environments.ExpiryAt(environment, m.now()); expiry.Status == environments.ExpiryExpired {
+		return "", &UnavailableError{Message: fmt.Sprintf("environment %q is expired", environmentID)}
+	}
 	for key, value := range environments.ExportValues(environment) {
 		if strings.IndexByte(value, 0) >= 0 {
 			return "", &InvalidError{Message: fmt.Sprintf("environment variable %q cannot be injected", key)}
@@ -511,6 +514,9 @@ func (m *Manager) injectEnvironment(command *Command, environmentID string, reso
 	environment, found, err := m.environments.Show(environmentID)
 	if err != nil || !found {
 		return &UnavailableError{Message: "selected environment is unavailable"}
+	}
+	if expiry := environments.ExpiryAt(environment, m.now()); expiry.Status == environments.ExpiryExpired {
+		return &UnavailableError{Message: fmt.Sprintf("environment %q is expired", environmentID)}
 	}
 	values := environments.ExportValues(environment)
 	for key, value := range values {

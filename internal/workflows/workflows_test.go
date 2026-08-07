@@ -212,6 +212,23 @@ func TestRunEnvironmentDefaultOverrideAndDisable(t *testing.T) {
 	}
 }
 
+func TestExpiredEnvironmentPreventsWorkflowExecution(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example\n")
+	now := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(-time.Second)
+	executor := &fakeExecutor{paths: map[string]string{"go": "/tools/go"}, execution: Execution{ExitCode: 0}}
+	manager := NewManager(fakeProjects{project: projects.Project{ID: "alpha", Path: root, EnvironmentID: "expired"}, found: true}, &memoryHistory{}, executor, func() time.Time { return now }).
+		WithEnvironmentStores(fakeEnvironments{items: map[string]environments.Environment{
+			"expired": {ID: "expired", ExpiresAt: &expiresAt, Exports: map[string]string{"SOURCE": "blocked"}},
+		}}, fakeSecrets{})
+	_, _, err := manager.Run(context.Background(), ProjectTest, "alpha")
+	var unavailable *UnavailableError
+	if !errors.As(err, &unavailable) || !strings.Contains(err.Error(), "expired") || executor.command.Executable != "" {
+		t.Fatalf("expired environment executed: command=%#v err=%v", executor.command, err)
+	}
+}
+
 func TestSecretInjectionMetadataAndMissingSecretPreventsExecution(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "go.mod"), "module example\n")

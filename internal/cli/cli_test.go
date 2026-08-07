@@ -97,6 +97,55 @@ func TestEnvironmentCRUDExportAndJSONContract(t *testing.T) {
 	}
 }
 
+func TestEnvironmentExpiryBlocksExportAndCanBeRenewed(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("APPDATA", filepath.Join(root, "config"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "state"))
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"env", "add", "temporary", "--expires-at", "2000-01-01T00:00:00Z", "--set", "FEATURE=on"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("add=%d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "export", "temporary"}, &stdout, &stderr); code != ExitConflict {
+		t.Fatalf("expired export=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "expired at") {
+		t.Fatalf("expired export was not safely blocked: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "health", "temporary", "--json"}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), `"available":false`) || !strings.Contains(stdout.String(), `"status":"expired"`) {
+		t.Fatalf("health=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "expiry", "temporary", "--ttl", "1h", "--json"}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), `"status":"expiring"`) {
+		t.Fatalf("renew=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"env", "export", "temporary"}, &stdout, &stderr); code != ExitOK || stdout.String() != "export FEATURE='on'\n" {
+		t.Fatalf("renewed export=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestEnvironmentExpiryArgumentsAreStrict(t *testing.T) {
+	for _, args := range [][]string{
+		{"env", "add", "dev", "--ttl", "0s"},
+		{"env", "add", "dev", "--ttl", "1h", "--expires-at", "2026-08-08T00:00:00Z"},
+		{"env", "expiry", "dev"},
+		{"env", "expiry", "dev", "--clear", "--ttl", "1h"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := Run(args, &stdout, &stderr); code != ExitArgument {
+			t.Fatalf("args=%v code=%d stdout=%s stderr=%s", args, code, stdout.String(), stderr.String())
+		}
+	}
+}
+
 func TestEnvironmentSecretReferencesHealthAndExplicitExport(t *testing.T) {
 	const sentinel = "ENV-SECRET-'SENTINEL"
 	root := t.TempDir()

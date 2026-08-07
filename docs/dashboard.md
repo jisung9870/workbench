@@ -35,6 +35,13 @@ state directory, verifies readiness through an authenticated loopback probe,
 and returns. `status` rejects stale or PID-reused records; `stop` uses the
 runtime-only control token for graceful shutdown.
 
+The background server also hosts a local scheduler. Its first registered job,
+`environment-expiry-scan`, runs immediately and then once per minute. The job
+only derives permanent/active/expiring/expired counts; it does not delete or
+rewrite registries. Job failure is isolated from HTTP serving and is visible in
+`wb server status --json` and the Dashboard Scheduler panel. Foreground
+`wb dashboard` reports the scheduler as unavailable.
+
 `--port 0` asks the operating system for an available port. A fixed port must be
 between 0 and 65535. Binding is always `127.0.0.1`; a wildcard or externally
 reachable address is not configurable.
@@ -48,6 +55,7 @@ reachable address is not configurable.
   and secret-reference availability status;
 - a live tmux session/window/pane hierarchy using stable tmux IDs and explicit
   managed, legacy, or foreign ownership;
+- scheduler availability, job status, last/next run, and expiry counts;
 - reconciled managed Agent records and snapshot-only observed tmux Tasks;
 - Git-verified linked worktrees;
 - per-project branch and porcelain change summaries;

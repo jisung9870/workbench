@@ -15,8 +15,10 @@ wb env list [--json]
 wb env show <id> [--json]
 wb env add <id> [--aws-profile <value>] [--aws-region <value>]
                 [--kube-context <value>] [--kube-namespace <value>]
+                [--ttl <duration>|--expires-at <RFC3339>]
                 [--set KEY=VALUE]...
                 [--secret KEY=sec://service/field]... [--json]
+wb env expiry <id> (--ttl <duration>|--expires-at <RFC3339>|--clear) [--json]
 wb env remove <id> [--json]
 wb env health <id> [--json]
 wb env export <id> [--resolve-secrets] [--json]
@@ -24,13 +26,29 @@ wb env migrate check|apply [--source <wenv.d>] [--json]
 ```
 
 All JSON forms use the standard schema-v1 Workbench envelope. An environment
-contains `id`, optional AWS and kube fields, an `exports` object, and a
+contains `id`, optional AWS and kube fields, an optional `expires_at`, an `exports` object, and a
 `secrets` object whose values are references such as `sec://github/token`.
 Secret reference names are metadata; resolved values never appear in list,
 show, health, migration, or JSON output. Migration
 responses contain the resolved source directory, `can_apply`, counts, and one
 item per preset with `ready`, `existing`, `unsupported`, or `conflict` status.
 `check` is read-only even when every item is ready.
+
+## Expiry policy
+
+An Environment is permanent when `expires_at` is absent. `--ttl 8h` calculates
+an absolute UTC expiration at write time; `--expires-at` accepts an RFC3339
+timestamp. `wb env expiry` renews that timestamp or removes it with `--clear`.
+Status is derived rather than stored:
+
+- `permanent`: no expiration;
+- `active`: more than 24 hours remain;
+- `expiring`: 24 hours or less remain;
+- `expired`: the expiration time has passed.
+
+Expiry is non-destructive. Workbench never deletes the Environment or referenced
+Secrets automatically. Every export and workflow launch checks the timestamp
+directly and blocks expired metadata even when the server is not running.
 
 `wb env health <id>` checks each reference and reports only `available`,
 `missing`, or `store_unavailable`. A missing store or invalid/wrong identity is
@@ -95,7 +113,7 @@ NUL-containing values fail before project code starts. Workflow state and API
 responses retain only the environment ID and the `resolve_secrets` request
 intent, never resolved values or reference details.
 
-Kubernetes context/namespace mutation, environment or credential expiry
-policy, and dedicated Dashboard environment/secret controls remain deferred.
+Kubernetes context/namespace mutation and dedicated Dashboard
+environment/secret edit controls remain deferred.
 Ordinary `exports` remain plaintext configuration and must not contain secret
 values.

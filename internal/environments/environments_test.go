@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/secrets"
@@ -73,6 +74,42 @@ func TestStoreCRUDBackupsAndPermissions(t *testing.T) {
 	removed, found, backup, err := store.Remove("dev")
 	if err != nil || !found || removed.ID != "dev" || backup == "" {
 		t.Fatalf("remove=%#v found=%v backup=%q err=%v", removed, found, backup, err)
+	}
+}
+
+func TestExpiryStatesAndStoreRenewal(t *testing.T) {
+	now := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)
+	activeAt := now.Add(48 * time.Hour)
+	expiringAt := now.Add(time.Hour)
+	expiredAt := now.Add(-time.Second)
+	for name, testCase := range map[string]struct {
+		expires *time.Time
+		want    ExpiryStatus
+	}{
+		"permanent": {want: ExpiryPermanent},
+		"active":    {expires: &activeAt, want: ExpiryActive},
+		"expiring":  {expires: &expiringAt, want: ExpiryExpiring},
+		"expired":   {expires: &expiredAt, want: ExpiryExpired},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := ExpiryAt(Environment{ExpiresAt: testCase.expires}, now); got.Status != testCase.want {
+				t.Fatalf("expiry=%#v", got)
+			}
+		})
+	}
+
+	paths := testPaths(t.TempDir())
+	store := NewStore(paths)
+	if _, err := store.Add(Environment{ID: "dev", ExpiresAt: &expiredAt}); err != nil {
+		t.Fatal(err)
+	}
+	item, found, backup, err := store.SetExpiry("dev", &activeAt)
+	if err != nil || !found || backup == "" || item.ExpiresAt == nil || !item.ExpiresAt.Equal(activeAt) {
+		t.Fatalf("renewed=%#v found=%v backup=%q err=%v", item, found, backup, err)
+	}
+	item, found, _, err = store.SetExpiry("dev", nil)
+	if err != nil || !found || item.ExpiresAt != nil {
+		t.Fatalf("cleared=%#v found=%v err=%v", item, found, err)
 	}
 }
 

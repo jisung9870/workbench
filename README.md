@@ -31,7 +31,8 @@ wb projects add <path> [--id <id>] [--profile <profile>]
 wb projects remove <id>
 wb env list [--json]
 wb env show <id> [--json]
-wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--secret KEY=sec://service/field]... [--json]
+wb env add <id> [--ttl <duration>|--expires-at <RFC3339>] [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--secret KEY=sec://service/field]... [--json]
+wb env expiry <id> (--ttl <duration>|--expires-at <RFC3339>|--clear) [--json]
 wb env remove <id> [--json]
 wb env health <id> [--json]
 wb env export <id> [--resolve-secrets] [--json]
@@ -114,6 +115,12 @@ Profile files support `schema_version`, `default_backend`,
 `windows_terminal_window`, and `windows_terminal_mode`.
 Unknown TOML fields, unsupported schema versions, and parser errors fail
 `wb config validate` instead of being silently ignored.
+
+Environments may include an optional RFC3339 `expires_at`. Workbench derives
+`permanent`, `active`, `expiring`, or `expired` state and blocks export and
+workflow injection after expiry without deleting metadata or Secrets. The
+background server runs a once-per-minute expiry scan for Dashboard visibility;
+command-time validation remains authoritative when the server is stopped.
 
 The schema-v1 registry is written in this shape (normally through
 `wb projects add`):
@@ -445,6 +452,10 @@ an ownership-verified managed session. Other mutations are limited to typed
 project-open, Agent start/jump/stop, and allowlisted workflow actions. Cross-origin requests and action
 requests without the per-process token are rejected; no arbitrary shell command
 field is exposed.
+
+When started with `wb server start`, the Dashboard also shows the scheduler and
+its `environment-expiry-scan` job. The scan runs immediately and once per minute,
+reports expiry counts, and never deletes registry or Secret data.
 
 The selected-project Context panel is read-only. It shows the linked environment
 and AWS/Kubernetes metadata, ordinary export key names, and normalized secret

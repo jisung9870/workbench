@@ -1197,7 +1197,7 @@ func runEnv(args []string, paths config.Paths, stdout, stderr io.Writer) *comman
 			return nil
 		}
 		for _, item := range items {
-			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", item.ID, item.AWSProfile, item.AWSRegion, item.KubeContext, item.KubeNamespace)
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", item.ID, item.AWSProfile, item.AWSRegion, item.KubeContext, item.KubeNamespace, environments.ExpiryAt(item, time.Now()).Status)
 		}
 		return nil
 	case "show":
@@ -1218,7 +1218,11 @@ func runEnv(args []string, paths config.Paths, stdout, stderr io.Writer) *comman
 			}
 			return nil
 		}
-		fmt.Fprintf(stdout, "id: %s\naws_profile: %s\naws_region: %s\nkube_context: %s\nkube_namespace: %s\n", item.ID, item.AWSProfile, item.AWSRegion, item.KubeContext, item.KubeNamespace)
+		expiry := environments.ExpiryAt(item, time.Now())
+		fmt.Fprintf(stdout, "id: %s\naws_profile: %s\naws_region: %s\nkube_context: %s\nkube_namespace: %s\nexpiry_status: %s\n", item.ID, item.AWSProfile, item.AWSRegion, item.KubeContext, item.KubeNamespace, expiry.Status)
+		if expiry.ExpiresAt != nil {
+			fmt.Fprintf(stdout, "expires_at: %s\n", expiry.ExpiresAt.Format(time.RFC3339))
+		}
 		keys := make([]string, 0, len(item.Exports))
 		for key := range item.Exports {
 			keys = append(keys, key)
@@ -1279,6 +1283,37 @@ func runEnv(args []string, paths config.Paths, stdout, stderr io.Writer) *comman
 			fmt.Fprintf(stdout, "backup %s\n", backup)
 		}
 		return nil
+	case "expiry":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--ttl": true, "--expires-at": true, "--clear": false, "--json": false})
+		if parseErr != nil || len(positionals) != 1 {
+			return invalid("usage: wb env expiry <id> (--ttl <duration>|--expires-at <RFC3339>|--clear) [--json]")
+		}
+		expiresAt, expiryErr := parseEnvironmentExpiry(options, time.Now())
+		if expiryErr != nil {
+			return expiryErr
+		}
+		item, found, backup, err := store.SetExpiry(positionals[0], expiresAt)
+		if err != nil {
+			return envError(err)
+		}
+		if !found {
+			return envNotFound(positionals[0])
+		}
+		expiry := environments.ExpiryAt(item, time.Now())
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"environment": item, "expiry": expiry, "backup": backup}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "environment: %s\nexpiry_status: %s\n", item.ID, expiry.Status)
+		if expiry.ExpiresAt != nil {
+			fmt.Fprintf(stdout, "expires_at: %s\n", expiry.ExpiresAt.Format(time.RFC3339))
+		}
+		if backup != "" {
+			fmt.Fprintf(stdout, "backup %s\n", backup)
+		}
+		return nil
 	case "export":
 		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false, "--resolve-secrets": false})
 		if parseErr != nil || len(positionals) != 1 {
@@ -1295,6 +1330,10 @@ func runEnv(args []string, paths config.Paths, stdout, stderr io.Writer) *comman
 		}
 		if !found {
 			return envNotFound(positionals[0])
+		}
+		expiry := environments.ExpiryAt(item, time.Now())
+		if expiry.Status == environments.ExpiryExpired {
+			return environmentExpired(item, expiry)
 		}
 		pending := []string{}
 		warnings := []string{}
@@ -1346,17 +1385,18 @@ func runEnv(args []string, paths config.Paths, stdout, stderr io.Writer) *comman
 			return envNotFound(positionals[0])
 		}
 		statuses := environments.CheckSecretReferences(item, secrets.NewStore(paths))
-		available := true
+		expiry := environments.ExpiryAt(item, time.Now())
+		available := expiry.Status != environments.ExpiryExpired
 		for _, status := range statuses {
 			available = available && status.Available
 		}
 		if _, jsonMode := options["--json"]; jsonMode {
-			if err := output.Write(stdout, map[string]any{"environment_id": item.ID, "available": available, "secret_references": statuses}, nil); err != nil {
+			if err := output.Write(stdout, map[string]any{"environment_id": item.ID, "available": available, "expiry": expiry, "secret_references": statuses}, nil); err != nil {
 				return generalError(err)
 			}
 			return nil
 		}
-		fmt.Fprintf(stdout, "environment: %s\navailable: %t\n", item.ID, available)
+		fmt.Fprintf(stdout, "environment: %s\navailable: %t\nexpiry_status: %s\n", item.ID, available, expiry.Status)
 		for _, status := range statuses {
 			state := "available"
 			if !status.Available {
@@ -1376,6 +1416,7 @@ func parseEnvAdd(args []string) (environments.Environment, bool, *commandError) 
 	item := environments.Environment{Exports: map[string]string{}, Secrets: map[string]string{}}
 	jsonMode := false
 	positionals := []string{}
+	expirySet := false
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		if argument == "--json" {
@@ -1395,6 +1436,17 @@ func parseEnvAdd(args []string) (environments.Environment, bool, *commandError) 
 		index++
 		value := args[index]
 		switch argument {
+		case "--ttl", "--expires-at":
+			if expirySet {
+				return item, false, invalid("only one of --ttl or --expires-at may be provided")
+			}
+			expiryOptions := map[string]string{argument: value}
+			expiresAt, expiryErr := parseEnvironmentExpiry(expiryOptions, time.Now())
+			if expiryErr != nil {
+				return item, false, expiryErr
+			}
+			item.ExpiresAt = expiresAt
+			expirySet = true
 		case "--aws-profile":
 			if item.AWSProfile != "" {
 				return item, false, invalid("option %q was provided more than once", argument)
@@ -1447,13 +1499,49 @@ func parseEnvAdd(args []string) (environments.Environment, bool, *commandError) 
 		}
 	}
 	if len(positionals) != 1 {
-		return item, false, invalid("usage: wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--secret KEY=sec://service/field]... [--json]")
+		return item, false, invalid("usage: wb env add <id> [--ttl <duration>|--expires-at <RFC3339>] [metadata options] [--set KEY=VALUE]... [--secret KEY=sec://service/field]... [--json]")
 	}
 	item.ID = positionals[0]
 	if err := environments.ValidateRegistry(environments.Registry{SchemaVersion: environments.SchemaVersion, Environments: []environments.Environment{item}}); err != nil {
 		return item, false, invalid("%s", err)
 	}
 	return item, jsonMode, nil
+}
+
+func parseEnvironmentExpiry(options map[string]string, now time.Time) (*time.Time, *commandError) {
+	_, clear := options["--clear"]
+	ttl := options["--ttl"]
+	expiresValue := options["--expires-at"]
+	selected := 0
+	if clear {
+		selected++
+	}
+	if ttl != "" {
+		selected++
+	}
+	if expiresValue != "" {
+		selected++
+	}
+	if selected != 1 {
+		return nil, invalid("exactly one of --ttl, --expires-at, or --clear is required")
+	}
+	if clear {
+		return nil, nil
+	}
+	if ttl != "" {
+		duration, err := time.ParseDuration(ttl)
+		if err != nil || duration <= 0 {
+			return nil, invalid("--ttl must be a positive Go duration such as 8h or 30m")
+		}
+		expiresAt := now.UTC().Add(duration)
+		return &expiresAt, nil
+	}
+	expiresAt, err := time.Parse(time.RFC3339, expiresValue)
+	if err != nil {
+		return nil, invalid("--expires-at must be RFC3339, for example 2026-08-08T09:00:00+09:00")
+	}
+	expiresAt = expiresAt.UTC()
+	return &expiresAt, nil
 }
 
 func runEnvMigrate(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
@@ -1522,6 +1610,18 @@ func defaultWenvDir(paths config.Paths) string {
 
 func envNotFound(id string) *commandError {
 	return &commandError{ExitCode: ExitGeneral, Code: "ENVIRONMENT_NOT_FOUND", Message: fmt.Sprintf("environment %q was not found", id), Details: map[string]any{"environment_id": id}}
+}
+
+func environmentExpired(item environments.Environment, expiry environments.Expiry) *commandError {
+	expiresAt := ""
+	if expiry.ExpiresAt != nil {
+		expiresAt = expiry.ExpiresAt.Format(time.RFC3339)
+	}
+	return &commandError{
+		ExitCode: ExitConflict, Code: "ENVIRONMENT_EXPIRED",
+		Message: fmt.Sprintf("environment %q expired at %s; renew it with 'wb env expiry %s --ttl <duration>' or clear the policy", item.ID, expiresAt, item.ID),
+		Details: map[string]any{"environment_id": item.ID, "expiry": expiry},
+	}
 }
 
 func envError(err error) *commandError {
@@ -1993,7 +2093,8 @@ Usage:
   wb projects remove <id>
   wb env list [--json]
   wb env show <id> [--json]
-  wb env add <id> [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--secret KEY=sec://service/field]... [--json]
+  wb env add <id> [--ttl <duration>|--expires-at <RFC3339>] [--aws-profile <value>] [--aws-region <value>] [--kube-context <value>] [--kube-namespace <value>] [--set KEY=VALUE]... [--secret KEY=sec://service/field]... [--json]
+  wb env expiry <id> (--ttl <duration>|--expires-at <RFC3339>|--clear) [--json]
   wb env remove <id> [--json]
   wb env health <id> [--json]
   wb env export <id> [--resolve-secrets] [--json]

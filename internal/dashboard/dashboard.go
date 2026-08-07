@@ -23,9 +23,11 @@ import (
 	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/doctor"
+	"github.com/jisung9870/workbench/internal/environments"
 	"github.com/jisung9870/workbench/internal/output"
 	"github.com/jisung9870/workbench/internal/overview"
 	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/scheduler"
 	"github.com/jisung9870/workbench/internal/tasks"
 	"github.com/jisung9870/workbench/internal/workflows"
 	"github.com/jisung9870/workbench/internal/worktrees"
@@ -73,6 +75,7 @@ type ContextEnvironment struct {
 	ExportKeys       []string                 `json:"export_keys"`
 	ProjectIDs       []string                 `json:"project_ids"`
 	SecretReferences []ContextSecretReference `json:"secret_references"`
+	Expiry           environments.Expiry      `json:"expiry"`
 }
 
 type ContextSummary struct {
@@ -83,6 +86,10 @@ type ContextSummary struct {
 	Missing           int `json:"missing"`
 	StoreUnavailable  int `json:"store_unavailable"`
 	InvalidReferences int `json:"invalid_references"`
+	Permanent         int `json:"permanent"`
+	Active            int `json:"active"`
+	Expiring          int `json:"expiring"`
+	Expired           int `json:"expired"`
 }
 
 type Contexts struct {
@@ -114,6 +121,7 @@ type Snapshot struct {
 	Workflows         []workflows.Availability `json:"workflows"`
 	WorkflowHistory   []WorkflowRun            `json:"workflow_history"`
 	Contexts          Contexts                 `json:"contexts"`
+	Scheduler         scheduler.Snapshot       `json:"scheduler"`
 }
 
 type ActionRequest struct {

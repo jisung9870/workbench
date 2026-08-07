@@ -78,6 +78,7 @@ function render() {
   document.querySelector(".pulse").classList.toggle("ok", !missing);
 
   renderTmux(data.tmux || { available: false, reason: "tmux observation unavailable", sessions: [] });
+  renderScheduler(data.scheduler || { available: false, running: false, reason: "scheduler unavailable", jobs: [] });
   renderUnregisteredTasks(tasks);
   renderOverview(data.overview || { counts: {}, attention: [], work_locations: [], tool_health: data.tool_health || { available: false, capabilities: [], summary: {} } });
 
@@ -171,16 +172,32 @@ function renderContexts(contexts, project) {
   const exportKeys = environment.export_keys || [];
   const secretReferences = environment.secret_references || [];
   const missingSecrets = secretReferences.filter(item => item.status !== "available");
-  status.textContent = missingSecrets.length ? "review" : "available";
-  status.className = `status ${missingSecrets.length ? "warning" : "available"}`;
+  const expiry = environment.expiry || { status: "permanent" };
+  const expiryBlocked = expiry.status === "expired";
+  status.textContent = expiryBlocked ? "expired" : (missingSecrets.length ? "review" : (expiry.status === "expiring" ? "expiring" : "available"));
+  status.className = `status ${expiryBlocked || expiry.status === "expiring" || missingSecrets.length ? "warning" : "available"}`;
   const metadata = [
     ["Environment", environment.id],
     ["AWS profile", environment.aws_profile || "Not set"],
     ["AWS region", environment.aws_region || "Not set"],
     ["Kubernetes context", environment.kube_context || "Not set"],
     ["Kubernetes namespace", environment.kube_namespace || "Not set"],
+    ["Expiry", expiry.expires_at ? `${expiry.status} · ${new Date(expiry.expires_at).toLocaleString()}` : "Permanent"],
   ];
   target.innerHTML = `<dl class="context-metadata">${metadata.map(([label, value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join("")}</dl><div class="context-group"><strong>Export keys</strong>${exportKeys.length ? `<div class="context-tags">${exportKeys.map(key => `<code>${esc(key)}</code>`).join("")}</div>` : '<p>No ordinary export keys</p>'}</div><div class="context-group"><strong>Secret references</strong>${secretReferences.length ? `<div class="context-secret-list">${secretReferences.map(item => `<div><code>${esc(item.variable)}</code><span class="status ${esc(item.status)}">${esc(item.status)}</span></div>`).join("")}</div>` : '<p>No secret references</p>'}</div>`;
+}
+
+function renderScheduler(scheduler) {
+  const jobs = scheduler.jobs || [];
+  $("scheduler-status").textContent = scheduler.available ? (scheduler.running ? "running" : "stopped") : "unavailable";
+  $("scheduler-status").className = `status ${scheduler.available && scheduler.running ? "available" : "warning"}`;
+  $("scheduler-availability").textContent = scheduler.available ? `${jobs.length} registered job${jobs.length === 1 ? "" : "s"}` : (scheduler.reason || "scheduler unavailable");
+  $("scheduler-availability").classList.toggle("unavailable", !scheduler.available);
+  $("scheduler-jobs").innerHTML = jobs.length ? jobs.map(job => {
+    const details = Object.entries(job.details || {}).map(([key, value]) => `${key} ${value}`).join(" · ");
+    const next = job.next_run_at ? new Date(job.next_run_at).toLocaleString() : "not scheduled";
+    return `<div class="row"><strong>${esc(job.id)}</strong><span class="status ${esc(job.status)}">${esc(job.status)}</span><small>${esc(details || job.error || "No result yet")} · next ${esc(next)}</small></div>`;
+  }).join("") : '<div class="row"><span>No scheduler jobs</span></div>';
 }
 
 function renderOverview(overview) {

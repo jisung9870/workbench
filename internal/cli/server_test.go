@@ -148,7 +148,7 @@ func TestServerServeStatusAndStopLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	envelope := output.Envelope{}
-	if err := json.Unmarshal(statusOutput.Bytes(), &envelope); err != nil || !envelope.OK || !bytes.Contains(statusOutput.Bytes(), []byte(`"status":"running"`)) {
+	if err := json.Unmarshal(statusOutput.Bytes(), &envelope); err != nil || !envelope.OK || !bytes.Contains(statusOutput.Bytes(), []byte(`"status":"running"`)) || !bytes.Contains(statusOutput.Bytes(), []byte(`"environment-expiry-scan"`)) {
 		t.Fatalf("unexpected status output: %s err=%v", statusOutput.String(), err)
 	}
 
