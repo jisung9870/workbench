@@ -32,6 +32,14 @@ func New(executor backend.Executor, environment Environment) *Adapter {
 func (adapter *Adapter) Name() backend.Name { return backend.WindowsTerminal }
 
 func (adapter *Adapter) Detect(_ context.Context, request backend.OpenRequest) backend.Capability {
+	switch request.Session {
+	case "", backend.Tmux:
+	default:
+		return backend.Capability{Backend: adapter.Name(), Available: false, Reason: fmt.Sprintf("Windows Terminal cannot host session backend %q", request.Session), Capabilities: []string{}}
+	}
+	if request.Session == backend.Tmux && adapter.env.GOOS == "windows" && request.Project.WindowsWSL == nil {
+		return backend.Capability{Backend: adapter.Name(), Available: false, Reason: "tmux session launch requires a WSL project target", Capabilities: []string{}}
+	}
 	if adapter.env.GOOS != "windows" && !adapter.isWSL() {
 		return backend.Capability{Backend: adapter.Name(), Available: false, Reason: "Windows Terminal requires native Windows or WSL interop", Capabilities: []string{}}
 	}
@@ -60,7 +68,11 @@ func (adapter *Adapter) Detect(_ context.Context, request backend.OpenRequest) b
 			}
 		}
 	}
-	return backend.Capability{Backend: adapter.Name(), Available: true, Version: "detected", Capabilities: []string{"open_project", "new_window", "new_tab", "split_pane", "set_starting_directory", "open_wsl_profile"}}
+	capabilities := []string{"open_project", "new_window", "new_tab", "split_pane", "set_starting_directory", "open_wsl_profile"}
+	if request.Session == backend.Tmux {
+		capabilities = append(capabilities, "attach_tmux_session")
+	}
+	return backend.Capability{Backend: adapter.Name(), Available: true, Version: "detected", Capabilities: capabilities}
 }
 
 func (adapter *Adapter) OpenProject(ctx context.Context, request backend.OpenRequest) (backend.OpenResult, error) {
@@ -96,6 +108,9 @@ func (adapter *Adapter) OpenProject(ctx context.Context, request backend.OpenReq
 			args = append(args, "-d", distro)
 		}
 		args = append(args, "--cd", wslPath)
+		if request.Session == backend.Tmux {
+			args = append(args, "--exec", "tmux", "attach-session", "-t", "="+request.Project.ID+":")
+		}
 	}
 	launchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -103,7 +118,9 @@ func (adapter *Adapter) OpenProject(ctx context.Context, request backend.OpenReq
 	if runErr != nil {
 		return adapter.result(request.Project.ID, process), fmt.Errorf("launch Windows Terminal: %w", runErr)
 	}
-	return adapter.result(request.Project.ID, process), nil
+	result := adapter.result(request.Project.ID, process)
+	result.Session = request.Session
+	return result, nil
 }
 
 type profileCatalog struct {
@@ -264,7 +281,7 @@ func normalizeJSONC(contents []byte) []byte {
 
 func (adapter *Adapter) result(projectID string, process backend.ProcessResult) backend.OpenResult {
 	return backend.OpenResult{
-		Backend: adapter.Name(), Reference: "windows-terminal:" + projectID, Command: process.Command,
+		Backend: adapter.Name(), Surface: adapter.Name(), Reference: "windows-terminal:" + projectID, Command: process.Command,
 		ExitCode: process.ExitCode, Stdout: process.Stdout, Stderr: process.Stderr,
 	}
 }

@@ -2,12 +2,15 @@ package workflows
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/jisung9870/workbench/internal/backend"
+	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/sessions"
 )
 
 type TmuxLauncher struct{ executor backend.Executor }
@@ -19,16 +22,18 @@ func NewTmuxLauncher(executor backend.Executor) *TmuxLauncher {
 var panePattern = regexp.MustCompile(`^%[0-9]+$`)
 
 func (l *TmuxLauncher) Launch(ctx context.Context, projectID, cwd, runID, executable string) (LaunchLocation, error) {
+	if _, _, err := sessions.NewManager(l.executor, nil).Ensure(ctx, projects.Project{ID: projectID, Path: cwd}); err != nil {
+		var unavailable *backend.UnavailableError
+		if errors.As(err, &unavailable) {
+			return LaunchLocation{}, errorsUnavailable(unavailable.Error())
+		}
+		return LaunchLocation{}, fmt.Errorf("ensure tmux session: %w", err)
+	}
 	tmux, err := l.executor.LookPath("tmux")
 	if err != nil {
 		return LaunchLocation{}, errorsUnavailable("tmux executable was not found")
 	}
-	target := "=" + projectID
-	if _, err := l.executor.Run(ctx, backend.ProcessRequest{Name: tmux, Args: []string{"has-session", "-t", target}}); err != nil {
-		if result, createErr := l.executor.Run(ctx, backend.ProcessRequest{Name: tmux, Args: []string{"new-session", "-d", "-s", projectID, "-c", cwd}}); createErr != nil {
-			return LaunchLocation{}, fmt.Errorf("create tmux session: %s: %w", strings.TrimSpace(result.Stderr), createErr)
-		}
-	}
+	target := "=" + projectID + ":"
 	window := "wf-" + runID[len(runID)-8:]
 	workerCommand := "exec " + shellWord(executable) + " " + shellWord("workflows") + " " + shellWord("worker") + " " + shellWord(runID)
 	result, err := l.executor.Run(ctx, backend.ProcessRequest{Name: tmux, Args: []string{"new-window", "-d", "-P", "-F", "#{pane_id}", "-t", target, "-n", window, "-c", cwd, workerCommand}})

@@ -85,6 +85,44 @@ func TestWSLOpenUsesExplicitWtAndWslArgumentArray(t *testing.T) {
 	}
 }
 
+func TestWSLOpenAttachesExistingProjectTmuxSessionWithTypedArguments(t *testing.T) {
+	executor := &fakeExecutor{}
+	adapter := New(executor, Environment{GOOS: "linux", Getenv: func(key string) string {
+		switch key {
+		case "WSL_INTEROP":
+			return "/run/WSL/1_interop"
+		case "WSL_DISTRO_NAME":
+			return "Ubuntu-24.04"
+		default:
+			return ""
+		}
+	}})
+	path := t.TempDir()
+	canonicalPath, err := projects.CanonicalPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := adapter.OpenProject(context.Background(), backend.OpenRequest{
+		Project: projects.Project{ID: "alpha", Path: path},
+		Profile: config.Profile{WindowsTerminalProfile: "Ubuntu-24.04"},
+		Session: backend.Tmux,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"--window", "last", "new-tab", "--profile", "Ubuntu-24.04",
+		"wsl.exe", "-d", "Ubuntu-24.04", "--cd", canonicalPath,
+		"--exec", "tmux", "attach-session", "-t", "=alpha:",
+	}
+	if executor.request.Name != "wt.exe" || !reflect.DeepEqual(executor.request.Args, want) {
+		t.Fatalf("unexpected Windows Terminal tmux command: %#v", executor.request)
+	}
+	if result.Session != backend.Tmux || result.Surface != backend.WindowsTerminal {
+		t.Fatalf("unexpected session/surface result: %#v", result)
+	}
+}
+
 func TestDetectAcceptsConfiguredProfileGUIDCaseInsensitively(t *testing.T) {
 	settings := filepath.Join(t.TempDir(), "settings.json")
 	contents := `{"profiles":{"list":[{"name":"Ubuntu","guid":"{12345678-1234-1234-1234-123456789ABC}"}]}}`
@@ -168,6 +206,14 @@ func TestDetectRejectsWSLLaunchWithoutKnownDistro(t *testing.T) {
 	}})
 	capability := adapter.Detect(context.Background(), backend.OpenRequest{})
 	if capability.Available || !strings.Contains(capability.Reason, "windows_terminal_distro") {
+		t.Fatalf("unexpected capability: %#v", capability)
+	}
+}
+
+func TestDetectRejectsTmuxSessionWithoutWSLTarget(t *testing.T) {
+	adapter := New(&fakeExecutor{}, Environment{GOOS: "windows", Getenv: func(string) string { return "" }})
+	capability := adapter.Detect(context.Background(), backend.OpenRequest{Session: backend.Tmux})
+	if capability.Available || !strings.Contains(capability.Reason, "requires a WSL project target") {
 		t.Fatalf("unexpected capability: %#v", capability)
 	}
 }

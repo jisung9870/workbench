@@ -78,22 +78,80 @@ func TestTmuxStopKillsOnlyVerifiedPane(t *testing.T) {
 	}
 }
 
-func TestTmuxLaunchSetsMetadataOnRawPaneID(t *testing.T) {
+func TestTmuxAliveTreatsOwnershipMismatchAsStopped(t *testing.T) {
+	task := Task{ID: "task-1", Backend: backend.Tmux, BackendRef: "tmux:%7", BackendDetails: map[string]string{"pane": "%7", "session": "alpha"}}
 	executor := &fakeExecutor{lookups: map[string]string{"tmux": "/usr/bin/tmux"}}
 	executor.run = func(request backend.ProcessRequest) (backend.ProcessResult, error) {
 		result := backend.ProcessResult{Command: append([]string{request.Name}, request.Args...), ExitCode: 0}
-		if len(request.Args) > 0 && request.Args[0] == "new-window" {
+		if len(request.Args) > 0 && request.Args[0] == "display-message" {
+			result.Stdout = "different-task\n"
+		}
+		return result, nil
+	}
+	alive, err := NewTmuxRuntime(executor, nil).Alive(context.Background(), task)
+	if err != nil || alive {
+		t.Fatalf("ownership mismatch must reconcile to stopped: alive=%v err=%v", alive, err)
+	}
+}
+
+func TestTmuxAliveRejectsInvalidPaneReference(t *testing.T) {
+	task := Task{ID: "task-1", Backend: backend.Tmux, BackendRef: "tmux:%7", BackendDetails: map[string]string{"pane": "7", "session": "alpha"}}
+	_, err := NewTmuxRuntime(&fakeExecutor{}, nil).Alive(context.Background(), task)
+	var unsafe *UnsafeError
+	if !errors.As(err, &unsafe) {
+		t.Fatalf("invalid pane reference was not rejected: %v", err)
+	}
+}
+
+func TestTmuxLaunchSetsSessionAndPaneOwnershipMetadata(t *testing.T) {
+	path := t.TempDir()
+	canonicalPath, err := projects.CanonicalPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeExecutor{lookups: map[string]string{"tmux": "/usr/bin/tmux"}}
+	sessionCreated := false
+	sessionOptions := map[string]string{}
+	executor.run = func(request backend.ProcessRequest) (backend.ProcessResult, error) {
+		result := backend.ProcessResult{Command: append([]string{request.Name}, request.Args...), ExitCode: 0}
+		switch request.Args[0] {
+		case "has-session":
+			if !sessionCreated {
+				result.ExitCode = 1
+				return result, errors.New("session missing")
+			}
+		case "new-session":
+			sessionCreated = true
+		case "set-option":
+			if len(request.Args) > 1 && request.Args[1] != "-p" {
+				sessionOptions[request.Args[3]] = request.Args[4]
+			}
+		case "list-sessions":
+			if sessionCreated {
+				result.Stdout = "alpha\t0\t1\n"
+			}
+		case "show-options":
+			result.Stdout = sessionOptions[request.Args[4]] + "\n"
+		case "list-panes":
+			result.Stdout = canonicalPath + "\n"
+		case "new-window":
 			result.Stdout = "%7\n"
 		}
 		return result, nil
 	}
 	started := ""
+	paneMetadataAtStart := 0
 	result, err := NewTmuxRuntime(executor, nil).Launch(context.Background(), LaunchRequest{
-		Task:       Task{ID: "task-1", AgentKind: "codex", CWD: "/tmp/project"},
-		Project:    projects.Project{ID: "alpha"},
+		Task:       Task{ID: "task-1", AgentKind: "codex", CWD: canonicalPath},
+		Project:    projects.Project{ID: "alpha", Path: path},
 		Executable: "/usr/bin/codex",
 		OnStarted: func(reference string, _ map[string]string, _ int) error {
 			started = reference
+			for _, call := range executor.calls {
+				if len(call.Args) > 1 && call.Args[0] == "set-option" && call.Args[1] == "-p" {
+					paneMetadataAtStart++
+				}
+			}
 			return nil
 		},
 	})
@@ -103,17 +161,20 @@ func TestTmuxLaunchSetsMetadataOnRawPaneID(t *testing.T) {
 	if result.Waited || started != "tmux:%7" {
 		t.Fatalf("unexpected tmux launch result: %#v ref=%q", result, started)
 	}
-	metadataCalls := 0
+	paneMetadataCalls := 0
 	for _, call := range executor.calls {
-		if len(call.Args) > 0 && call.Args[0] == "set-option" {
-			metadataCalls++
+		if len(call.Args) > 1 && call.Args[0] == "set-option" && call.Args[1] == "-p" {
+			paneMetadataCalls++
 			if len(call.Args) < 4 || call.Args[3] != "%7" {
 				t.Fatalf("metadata did not target raw pane ID: %#v", call.Args)
 			}
 		}
 	}
-	if metadataCalls != 2 {
-		t.Fatalf("unexpected metadata call count: %d", metadataCalls)
+	if paneMetadataCalls != 2 || paneMetadataAtStart != 2 {
+		t.Fatalf("unexpected pane metadata timing: total=%d at_start=%d", paneMetadataCalls, paneMetadataAtStart)
+	}
+	if sessionOptions["@workbench_managed"] != "1" || sessionOptions["@workbench_project_id"] != "alpha" || sessionOptions["@workbench_project_path"] != canonicalPath {
+		t.Fatalf("session ownership metadata missing: %#v", sessionOptions)
 	}
 }
 

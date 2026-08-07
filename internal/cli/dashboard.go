@@ -30,6 +30,7 @@ import (
 	"github.com/jisung9870/workbench/internal/overview"
 	"github.com/jisung9870/workbench/internal/projects"
 	"github.com/jisung9870/workbench/internal/secrets"
+	sessionstate "github.com/jisung9870/workbench/internal/sessions"
 	"github.com/jisung9870/workbench/internal/tasks"
 	"github.com/jisung9870/workbench/internal/workflows"
 	"github.com/jisung9870/workbench/internal/worktrees"
@@ -40,6 +41,14 @@ type dashboardService struct {
 	tmux      tmuxRuntime
 	executor  backend.Executor
 	workflows workflowRuntime
+	sessions  sessionRuntime
+}
+
+type sessionRuntime interface {
+	Attach(context.Context, string, bool) (sessionstate.Item, error)
+	Adopt(context.Context, projects.Project) (sessionstate.Item, bool, error)
+	Stop(context.Context, projects.Project) (sessionstate.Item, error)
+	Ensure(context.Context, projects.Project) (sessionstate.Item, bool, error)
 }
 
 type workflowRuntime interface {
@@ -294,10 +303,17 @@ func (service *dashboardService) tmuxObserver(executor backend.Executor) tmuxRun
 	return tmuxadapter.New(executor, os.Getenv)
 }
 
+func (service *dashboardService) sessionManager(executor backend.Executor) sessionRuntime {
+	if service.sessions != nil {
+		return service.sessions
+	}
+	return sessionstate.NewManager(executor, os.Getenv)
+}
+
 func (service *dashboardService) Execute(ctx context.Context, request dashboard.ActionRequest) (dashboard.ActionResult, error) {
 	switch request.Action {
 	case "run_workflow":
-		if request.ProjectID == "" || request.WorkflowID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" {
+		if request.ProjectID == "" || request.WorkflowID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.SessionName != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("run_workflow requires only project_id and workflow_id")
 		}
 		result, _, err := service.workflowManager().Launch(ctx, request.WorkflowID, request.ProjectID)
@@ -322,7 +338,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 		safeResult := dashboard.SafeWorkflowRun(result)
 		return dashboard.ActionResult{Message: fmt.Sprintf("workflow %s launched with status %s", result.WorkflowID, result.Status), WorkflowRun: &safeResult}, nil
 	case "jump_task":
-		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
+		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" || request.SessionName != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("jump_task requires only task_id")
 		}
 		if strings.HasPrefix(request.TaskID, "run-") {
@@ -351,7 +367,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 		}
 		return dashboard.ActionResult{Message: fmt.Sprintf("jumped to %s with %s", task.ID, task.Backend)}, nil
 	case "stop_task":
-		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
+		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" || request.SessionName != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("stop_task requires only task_id")
 		}
 		if strings.HasPrefix(request.TaskID, "run-") {
@@ -366,7 +382,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 		}
 		return dashboard.ActionResult{Message: fmt.Sprintf("stopped task %s", task.ID)}, nil
 	case "jump_pane":
-		if request.PaneID == "" || request.ProjectID != "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.WorkflowID != "" {
+		if request.PaneID == "" || request.ProjectID != "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.WorkflowID != "" || request.SessionName != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("jump_pane requires only pane_id")
 		}
 		executor := &backend.OSExecutor{Stdout: io.Discard, Stderr: io.Discard}
@@ -376,8 +392,47 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 		return dashboard.ActionResult{Message: fmt.Sprintf("jumped to tmux pane %s", request.PaneID)}, nil
 	case "open_project":
 		return service.openProject(ctx, request)
+	case "attach_session":
+		if request.SessionName == "" || request.ProjectID != "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
+			return dashboard.ActionResult{}, dashboardInvalid("attach_session requires only session_name")
+		}
+		item, err := service.sessionManager(service.processExecutor()).Attach(ctx, request.SessionName, false)
+		if err != nil {
+			return dashboard.ActionResult{}, dashboardCommandError(sessionError(err))
+		}
+		return dashboard.ActionResult{Message: fmt.Sprintf("attached tmux session %s", item.Name), Session: backend.Tmux, Surface: backend.Tmux}, nil
+	case "adopt_session":
+		if request.ProjectID == "" || request.SessionName != "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
+			return dashboard.ActionResult{}, dashboardInvalid("adopt_session requires only project_id")
+		}
+		project, projectErr := sessionProject(service.paths, request.ProjectID)
+		if projectErr != nil {
+			return dashboard.ActionResult{}, dashboardCommandError(projectErr)
+		}
+		item, adopted, err := service.sessionManager(service.processExecutor()).Adopt(ctx, project)
+		if err != nil {
+			return dashboard.ActionResult{}, dashboardCommandError(sessionError(err))
+		}
+		message := fmt.Sprintf("tmux session %s was already managed", item.Name)
+		if adopted {
+			message = fmt.Sprintf("adopted tmux session %s", item.Name)
+		}
+		return dashboard.ActionResult{Message: message, Session: backend.Tmux, Surface: backend.Tmux}, nil
+	case "stop_session":
+		if request.ProjectID == "" || request.SessionName != "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
+			return dashboard.ActionResult{}, dashboardInvalid("stop_session requires only project_id")
+		}
+		project, projectErr := sessionProject(service.paths, request.ProjectID)
+		if projectErr != nil {
+			return dashboard.ActionResult{}, dashboardCommandError(projectErr)
+		}
+		item, err := service.sessionManager(service.processExecutor()).Stop(ctx, project)
+		if err != nil {
+			return dashboard.ActionResult{}, dashboardCommandError(sessionError(err))
+		}
+		return dashboard.ActionResult{Message: fmt.Sprintf("stopped managed tmux session %s", item.Name), Session: backend.Tmux}, nil
 	case "start_agent":
-		if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind == "" || request.PaneID != "" || request.WorkflowID != "" {
+		if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind == "" || request.PaneID != "" || request.WorkflowID != "" || request.SessionName != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("start_agent requires project_id and agent_kind")
 		}
 		requested, err := service.agentBackend(ctx, request.ProjectID, request.Backend)
@@ -391,7 +446,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 		}
 		return dashboard.ActionResult{Message: fmt.Sprintf("started %s task %s", task.AgentKind, task.ID)}, nil
 	case "jump_agent":
-		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
+		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" || request.SessionName != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("jump_agent requires only task_id")
 		}
 		task, jumpErr := newAgentManager(service.paths, io.Discard, io.Discard).Jump(ctx, request.TaskID)
@@ -400,7 +455,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 		}
 		return dashboard.ActionResult{Message: fmt.Sprintf("jumped to %s with %s", task.ID, task.Backend)}, nil
 	case "stop_agent":
-		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
+		if request.TaskID == "" || len(request.TaskIDs) != 0 || request.ProjectID != "" || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" || request.SessionName != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("stop_agent requires only task_id")
 		}
 		task, _, stopErr := newAgentManager(service.paths, io.Discard, io.Discard).Stop(ctx, request.TaskID)
@@ -409,7 +464,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 		}
 		return dashboard.ActionResult{Message: fmt.Sprintf("stopped task %s", task.ID)}, nil
 	case "clear_agent_history":
-		if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) == 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" {
+		if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) == 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" || request.SessionName != "" {
 			return dashboard.ActionResult{}, dashboardInvalid("clear_agent_history requires project_id and task_ids")
 		}
 		if _, found, projectErr := projects.NewStore(service.paths).Show(request.ProjectID); projectErr != nil {
@@ -428,7 +483,7 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 }
 
 func (service *dashboardService) openProject(ctx context.Context, request dashboard.ActionRequest) (dashboard.ActionResult, error) {
-	if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.PaneID != "" || request.WorkflowID != "" {
+	if request.ProjectID == "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.PaneID != "" || request.WorkflowID != "" || request.SessionName != "" {
 		return dashboard.ActionResult{}, dashboardInvalid("open_project requires project_id and optional backend")
 	}
 	project, found, err := projects.NewStore(service.paths).Show(request.ProjectID)
@@ -450,31 +505,57 @@ func (service *dashboardService) openProject(ctx context.Context, request dashbo
 	if err != nil {
 		return dashboard.ActionResult{}, dashboardInvalid(err.Error())
 	}
-	executor := &backend.OSExecutor{Stdout: io.Discard, Stderr: io.Discard}
+	executor := service.processExecutor()
 	environment := backend.CurrentEnvironment()
-	selection, err := selectDashboardOpenBackend(ctx, dashboardBackendRegistry(executor, environment), backend.OpenRequest{Project: project, Profile: profile}, requested, environment)
+	openRequest := backend.OpenRequest{Project: project, Profile: profile}
+	selection, err := selectDashboardOpenBackend(ctx, dashboardBackendRegistry(executor, environment), openRequest, requested, environment)
 	if err != nil {
 		return dashboard.ActionResult{}, dashboardCommandError(backendSelectionError(err))
 	}
-	result, err := selection.Adapter.OpenProject(ctx, backend.OpenRequest{Project: project, Profile: profile})
+	if selection.Session == backend.Tmux {
+		if _, _, ensureErr := service.sessionManager(executor).Ensure(ctx, project); ensureErr != nil {
+			return dashboard.ActionResult{}, dashboardCommandError(sessionError(ensureErr))
+		}
+	}
+	openRequest.Session = selection.Session
+	result, err := selection.Adapter.OpenProject(ctx, openRequest)
 	if err != nil {
 		return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusInternalServerError, Code: "BACKEND_EXECUTION_FAILED", Message: err.Error()}
 	}
-	return dashboard.ActionResult{Message: fmt.Sprintf("opened %s with %s", project.ID, result.Backend)}, nil
+	session := result.Session
+	if session == "" {
+		session = selection.Session
+	}
+	surface := result.Surface
+	if surface == "" {
+		surface = selection.Surface
+	}
+	message := fmt.Sprintf("opened %s with %s", project.ID, surface)
+	if session != "" {
+		message = fmt.Sprintf("opened %s with %s via %s", project.ID, session, surface)
+	}
+	return dashboard.ActionResult{Message: message, Session: session, Surface: surface}, nil
 }
 
 func selectDashboardOpenBackend(ctx context.Context, registry *backend.Registry, request backend.OpenRequest, requested backend.Name, environment backend.Environment) (backend.Selection, error) {
 	if requested != backend.Auto {
-		if requested != backend.CMUX && requested != backend.WindowsTerminal {
-			return backend.Selection{}, fmt.Errorf("Dashboard project open supports only cmux or Windows Terminal, not %s", requested)
+		if requested == backend.Tmux {
+			return selectDashboardTmuxSurface(ctx, registry, request, environment)
 		}
-		return registry.Select(ctx, request, requested)
+		if requested != backend.CMUX && requested != backend.WindowsTerminal {
+			return backend.Selection{}, fmt.Errorf("Dashboard project open supports tmux, cmux, or Windows Terminal, not %s", requested)
+		}
+		selection, err := registry.Select(ctx, request, requested)
+		if err == nil {
+			selection.Surface = selection.Adapter.Name()
+		}
+		return selection, err
 	}
 
 	candidates := []backend.Name{}
 	seen := map[backend.Name]struct{}{}
 	appendCandidate := func(name backend.Name) {
-		if name != backend.CMUX && name != backend.WindowsTerminal {
+		if name != backend.Tmux && name != backend.CMUX && name != backend.WindowsTerminal {
 			return
 		}
 		if _, exists := seen[name]; exists {
@@ -485,6 +566,9 @@ func selectDashboardOpenBackend(ctx context.Context, registry *backend.Registry,
 	}
 	appendCandidate(backend.Name(request.Project.DefaultBackend))
 	appendCandidate(backend.Name(request.Profile.DefaultBackend))
+	if request.Profile.PreferCurrentTmux && environment.IsWSL() {
+		appendCandidate(backend.Tmux)
+	}
 	for _, configured := range request.Profile.BackendPriority {
 		candidate := backend.Name(configured)
 		if candidate == backend.CMUX && environment.IsSSH() {
@@ -501,7 +585,14 @@ func selectDashboardOpenBackend(ctx context.Context, registry *backend.Registry,
 
 	reasons := []string{}
 	for _, candidate := range candidates {
-		selection, err := registry.Select(ctx, request, candidate)
+		var selection backend.Selection
+		var err error
+		if candidate == backend.Tmux {
+			selection, err = selectDashboardTmuxSurface(ctx, registry, request, environment)
+		} else {
+			selection, err = registry.Select(ctx, request, candidate)
+			selection.Surface = candidate
+		}
 		if err == nil {
 			return selection, nil
 		}
@@ -511,11 +602,28 @@ func selectDashboardOpenBackend(ctx context.Context, registry *backend.Registry,
 		}
 		reasons = append(reasons, fmt.Sprintf("%s: %s", candidate, unavailable.Reason))
 	}
-	reason := "no Dashboard-compatible backend was detected; use the CLI for tmux or shell project open"
+	reason := "no Dashboard-compatible session and terminal surface combination was detected"
 	if len(reasons) > 0 {
 		reason += "; " + strings.Join(reasons, "; ")
 	}
 	return backend.Selection{}, &backend.UnavailableError{Backend: backend.Auto, Reason: reason}
+}
+
+func selectDashboardTmuxSurface(ctx context.Context, registry *backend.Registry, request backend.OpenRequest, environment backend.Environment) (backend.Selection, error) {
+	if !environment.IsWSL() {
+		return backend.Selection{}, &backend.UnavailableError{Backend: backend.Tmux, Reason: "Dashboard tmux open currently requires WSL with Windows Terminal"}
+	}
+	if _, err := registry.Select(ctx, request, backend.Tmux); err != nil {
+		return backend.Selection{}, err
+	}
+	request.Session = backend.Tmux
+	selection, err := registry.Select(ctx, request, backend.WindowsTerminal)
+	if err != nil {
+		return backend.Selection{}, err
+	}
+	selection.Session = backend.Tmux
+	selection.Surface = backend.WindowsTerminal
+	return selection, nil
 }
 
 func (service *dashboardService) agentBackend(ctx context.Context, projectID, requestedValue string) (backend.Name, error) {

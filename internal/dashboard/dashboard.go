@@ -21,6 +21,7 @@ import (
 	binboxadapter "github.com/jisung9870/workbench/adapters/binbox"
 	tmuxadapter "github.com/jisung9870/workbench/adapters/tmux"
 	"github.com/jisung9870/workbench/internal/agents"
+	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/doctor"
 	"github.com/jisung9870/workbench/internal/output"
 	"github.com/jisung9870/workbench/internal/overview"
@@ -116,20 +117,23 @@ type Snapshot struct {
 }
 
 type ActionRequest struct {
-	Action     string   `json:"action"`
-	ProjectID  string   `json:"project_id,omitempty"`
-	TaskID     string   `json:"task_id,omitempty"`
-	TaskIDs    []string `json:"task_ids,omitempty"`
-	AgentKind  string   `json:"agent_kind,omitempty"`
-	Backend    string   `json:"backend,omitempty"`
-	PaneID     string   `json:"pane_id,omitempty"`
-	WorkflowID string   `json:"workflow_id,omitempty"`
+	Action      string   `json:"action"`
+	ProjectID   string   `json:"project_id,omitempty"`
+	TaskID      string   `json:"task_id,omitempty"`
+	TaskIDs     []string `json:"task_ids,omitempty"`
+	AgentKind   string   `json:"agent_kind,omitempty"`
+	Backend     string   `json:"backend,omitempty"`
+	PaneID      string   `json:"pane_id,omitempty"`
+	WorkflowID  string   `json:"workflow_id,omitempty"`
+	SessionName string   `json:"session_name,omitempty"`
 }
 
 type ActionResult struct {
 	Message     string       `json:"message"`
 	Output      string       `json:"output,omitempty"`
 	WorkflowRun *WorkflowRun `json:"workflow_run,omitempty"`
+	Session     backend.Name `json:"session,omitempty"`
+	Surface     backend.Name `json:"surface,omitempty"`
 }
 
 type Service interface {

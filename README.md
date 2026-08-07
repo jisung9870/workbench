@@ -1,15 +1,15 @@
 # workbench
 
-`wb` is the headless control plane for project, worktree, and Agent state plus
-backend-aware project launch shared by the dev environment clients. A common
-session lifecycle remains a later slice.
+`wb` is the headless control plane for project, managed tmux session, worktree,
+and Agent state plus backend-aware project launch shared by the dev environment
+clients.
 
 ## Baseline
 
 - Toolchain: Go 1.25.12
 - Targets: Linux (`amd64`, `arm64`), macOS (`amd64`, `arm64`), and Windows
   (`amd64`, `arm64`)
-- Runtime: one CLI process; no daemon
+- Runtime: one CLI process, plus an optional user-started loopback Dashboard server
 - Data contract: schema version 1
 
 The initial implementation uses the Go standard library for CLI parsing, JSON,
@@ -42,7 +42,11 @@ wb secrets set <service> <field> [--replace] [--json]
 wb secrets get <service> [field]
 wb secrets remove <service> [field] [--yes] [--json]
 wb secrets migrate check|apply [--json]
-wb open <id> [--backend auto|cmux|windows-terminal|tmux|shell]
+wb open <id> [--backend auto|cmux|windows-terminal|tmux|shell] [--session none|tmux]
+wb sessions list [--json]
+wb sessions show|attach <session-name> [--json]
+wb sessions adopt|stop <project-id> [--json]
+wb sessions jump <pane-id>
 wb worktrees list <project-id> [--json]
 wb worktrees create <project-id> <branch> [--base <ref>]
 wb worktrees remove <worktree-id> [--delete-branch]
@@ -55,6 +59,10 @@ wb compatibility observe --client <client> --feature <feature> --source <source>
 wb overview [--json]
 wb doctor [--profile <name>] [--json] [--strict]
 wb dashboard [--open auto|cmux|browser|none] [--port <0-65535>]
+wb server start [--open auto|cmux|browser|none] [--port <0-65535>]
+wb server status [--json]
+wb server stop [--json]
+wb completion zsh
 wb config validate
 wb migrate [sessionizer] --check|--apply [--file <path>] [--profile <profile>]
 ```
@@ -226,10 +234,12 @@ wb open terraform-lab --backend tmux
 wb open terraform-lab --backend windows-terminal
 wb open terraform-lab --backend windows-terminal --window new
 wb open terraform-lab --backend windows-terminal --window last --terminal-mode split-vertical
+wb open terraform-lab --backend windows-terminal --session tmux
 ```
 
 The shell adapter starts the configured interactive shell in the project
-directory. The tmux adapter creates or reuses the exact project-ID session. The
+directory. The tmux adapter creates or reuses the exact project-ID session and
+records ownership metadata on the tmux session. The
 cmux adapter invokes `cmux <project-path>` only on macOS. The Windows Terminal
 adapter distinguishes native Windows from WSL and never infers a WSL path from
 a Windows path. Native-to-WSL projects require an explicit registry overlay:
@@ -411,22 +421,28 @@ Dashboard snapshot.
 ## Local Dashboard
 
 `wb dashboard` serves an embedded responsive UI and versioned API on an
-ephemeral loopback port. It remains a foreground process and releases the
-listener when interrupted.
+ephemeral loopback port. Use `wb server start|status|stop` when the same UI
+should run as a background process. Both modes bind only to loopback and keep
+Workbench registries as the source of truth.
 
 ```bash
 wb dashboard
 wb dashboard --open browser
 wb dashboard --open cmux
 wb dashboard --open none --port 0
+wb server start --open browser
+wb server status
+wb server stop
 ```
 
 The Dashboard opens with an operations overview of active managed/observed
 Tasks, tmux sessions, evidence-backed attention, resumable work locations, and
 binbox tool health. It also shows registered projects, linked worktrees, Git
 change summaries, Doctor capabilities, applicable typed workflows, and recent
-workflow results. Mutations are limited to typed project-open, Agent
-start/jump/stop, and allowlisted workflow actions. Cross-origin requests and action
+workflow results. tmux cards identify managed, legacy, and foreign sessions;
+typed actions can attach, adopt a path-verified legacy project session, or stop
+an ownership-verified managed session. Other mutations are limited to typed
+project-open, Agent start/jump/stop, and allowlisted workflow actions. Cross-origin requests and action
 requests without the per-process token are rejected; no arbitrary shell command
 field is exposed.
 
@@ -448,6 +464,7 @@ Install the current source build into the user environment:
 
 ```bash
 make install
+make install-completion
 ```
 
 The default destination is `~/.local/bin/wb`. Override it when needed:

@@ -1,0 +1,75 @@
+#compdef wb
+
+_wb_values() {
+  local command_name="$1"
+  local -a values
+  local line
+  for line in ${(f)"$(command wb ${=command_name} 2>/dev/null)"}; do
+    values+=("${line%%$'\t'*}")
+  done
+  _describe -t values "$2" values
+}
+
+_wb() {
+  local -a commands subcommands
+  commands=(
+    'projects:Register projects and connect environments'
+    'env:Manage runtime environment metadata'
+    'secrets:Manage the encrypted local Secret store'
+    'open:Open a project in a terminal backend'
+    'sessions:Observe and manage tmux sessions'
+    'tasks:Inspect managed and observed tasks'
+    'agents:Start and control Agent tasks'
+    'workflows:Run allowlisted detached workflows'
+    'worktrees:Manage safe Git worktrees'
+    'overview:Summarize the operations console'
+    'server:Run the Dashboard in the background'
+    'dashboard:Run the Dashboard in the foreground'
+    'doctor:Check configuration and capabilities'
+    'config:Validate Workbench configuration'
+    'migrate:Import legacy project configuration'
+    'compatibility:Record compatibility observations'
+    'completion:Generate shell completion'
+    'help:Show command help'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe -t commands 'wb command' commands
+    return
+  fi
+
+  case "$words[2]" in
+    projects)
+      subcommands=('list:List projects' 'show:Show a project' 'add:Register a project' 'set-environment:Connect an Environment' 'remove:Remove a registry entry')
+      if (( CURRENT == 3 )); then _describe -t commands 'project command' subcommands; return; fi ;;
+    env)
+      subcommands=('list:List Environments' 'show:Show an Environment' 'add:Add an Environment' 'remove:Remove an Environment' 'health:Check references' 'export:Emit shell exports' 'migrate:Migrate wenv.d')
+      if (( CURRENT == 3 )); then _describe -t commands 'Environment command' subcommands; return; fi ;;
+    secrets)
+      subcommands=('init:Initialize the store' 'list:List names' 'set:Set a value' 'get:Get a value' 'remove:Remove a value' 'migrate:Migrate legacy sec')
+      if (( CURRENT == 3 )); then _describe -t commands 'Secret command' subcommands; return; fi ;;
+    sessions)
+      subcommands=('list:List hierarchy' 'show:Show ownership' 'jump:Jump to a pane' 'attach:Attach to a session' 'adopt:Adopt a project session' 'stop:Stop a managed session')
+      if (( CURRENT == 3 )); then _describe -t commands 'session command' subcommands; return; fi ;;
+    tasks) subcommands=('list:List tasks' 'show:Show a task' 'jump:Jump to a task' 'stop:Stop an owned task'); if (( CURRENT == 3 )); then _describe -t commands 'task command' subcommands; return; fi ;;
+    agents) subcommands=('list:List Agents' 'show:Show an Agent' 'start:Start an Agent' 'jump:Jump to an Agent' 'stop:Stop an Agent'); if (( CURRENT == 3 )); then _describe -t commands 'Agent command' subcommands; return; fi ;;
+    workflows) subcommands=('catalog:List workflows' 'run:Run a workflow' 'history:List history' 'show:Show a run'); if (( CURRENT == 3 )); then _describe -t commands 'workflow command' subcommands; return; fi ;;
+    worktrees) subcommands=('list:List worktrees' 'create:Create a worktree' 'remove:Remove a worktree'); if (( CURRENT == 3 )); then _describe -t commands 'worktree command' subcommands; return; fi ;;
+    server) subcommands=('start:Start the server' 'status:Show server status' 'stop:Stop the server'); if (( CURRENT == 3 )); then _describe -t commands 'server command' subcommands; return; fi ;;
+    config) subcommands=('validate:Validate configuration'); if (( CURRENT == 3 )); then _describe -t commands 'config command' subcommands; return; fi ;;
+    completion) subcommands=('zsh:Print zsh completion'); if (( CURRENT == 3 )); then _describe -t commands 'shell' subcommands; return; fi ;;
+  esac
+
+  case "$words[2] $words[3]" in
+    'projects show'|'projects remove'|'projects set-environment') _arguments '*:project ID:_wb_values "projects list" "project ID"' ;;
+	'open '*) _arguments '2:project ID:_wb_values "projects list" "project ID"' '--backend=[Terminal surface]:backend:(auto cmux windows-terminal tmux shell)' '--session=[Persistent session backend]:session:(none tmux)' '--window=[Windows Terminal target]:target:(last new)' '--terminal-mode=[Windows Terminal mode]:mode:(tab split-auto split-horizontal split-vertical)' ;;
+    'env show'|'env remove'|'env health'|'env export') _arguments '*:Environment ID:_wb_values "env list" "Environment ID"' ;;
+    'sessions show'|'sessions attach') _arguments '*:session:_wb_values "sessions list" "tmux session"' ;;
+    'sessions jump') _arguments '*:pane ID:' ;;
+    'sessions adopt'|'sessions stop') _arguments '*:project ID:_wb_values "projects list" "project ID"' ;;
+    'server start') _arguments '--open=[Open target]:target:(auto cmux browser none)' '--port=[Loopback port]:port:' '--json[JSON output]' ;;
+    'server status'|'server stop') _arguments '--json[JSON output]' ;;
+  esac
+}
+
+_wb "$@"

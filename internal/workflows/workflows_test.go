@@ -669,24 +669,41 @@ func TestWorkerWaitsForStartingBeforeClaim(t *testing.T) {
 }
 
 func TestTmuxLauncherUsesExactArgumentArrayAndWorkerIDOnly(t *testing.T) {
-	exec := &tmuxExec{paths: map[string]string{"tmux": "/tmux"}, results: []backend.ProcessResult{{}, {Stdout: "%9\n"}, {}, {}}}
+	cwd := filepath.Join(t.TempDir(), "repo with spaces")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	canonicalPath, err := projects.CanonicalPath(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := &tmuxExec{
+		paths: map[string]string{"tmux": "/tmux"},
+		results: []backend.ProcessResult{
+			{ExitCode: 1}, {}, {}, {}, {}, {Stdout: "alpha\t0\t1\n"},
+			{Stdout: "1\n"}, {Stdout: "alpha\n"}, {Stdout: canonicalPath + "\n"}, {Stdout: canonicalPath + "\n"},
+			{Stdout: "%9\n"}, {}, {},
+		},
+		errors: []error{errors.New("session missing")},
+	}
 	launcher := NewTmuxLauncher(exec)
-	location, err := launcher.Launch(context.Background(), "alpha", "/repo with spaces", "run-100-abcdef12", "/opt/wb app")
+	location, err := launcher.Launch(context.Background(), "alpha", cwd, "run-100-abcdef12", "/opt/wb app")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if location.PaneID != "%9" {
 		t.Fatalf("location=%#v", location)
 	}
-	want := []string{"new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=alpha", "-n", "wf-abcdef12", "-c", "/repo with spaces", "exec '/opt/wb app' 'workflows' 'worker' 'run-100-abcdef12'"}
-	if !reflect.DeepEqual(exec.requests[1].Args, want) {
-		t.Fatalf("tmux argv=%#v", exec.requests[1].Args)
+	want := []string{"new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=alpha:", "-n", "wf-abcdef12", "-c", cwd, "exec '/opt/wb app' 'workflows' 'worker' 'run-100-abcdef12'"}
+	if !reflect.DeepEqual(exec.requests[10].Args, want) {
+		t.Fatalf("tmux argv=%#v", exec.requests[10].Args)
 	}
 }
 
 func TestDetachedLaunchReportsUnavailableTmux(t *testing.T) {
+	cwd := t.TempDir()
 	launcher := NewTmuxLauncher(&tmuxExec{})
-	_, err := launcher.Launch(context.Background(), "alpha", "/repo", "run-100-abcdef12", "/wb")
+	_, err := launcher.Launch(context.Background(), "alpha", cwd, "run-100-abcdef12", "/wb")
 	var unavailable *UnavailableError
 	if !errors.As(err, &unavailable) {
 		t.Fatalf("missing tmux not unavailable: %v", err)

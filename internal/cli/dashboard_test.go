@@ -21,6 +21,7 @@ import (
 	"github.com/jisung9870/workbench/internal/environments"
 	"github.com/jisung9870/workbench/internal/projects"
 	"github.com/jisung9870/workbench/internal/secrets"
+	sessionstate "github.com/jisung9870/workbench/internal/sessions"
 	"github.com/jisung9870/workbench/internal/workflows"
 )
 
@@ -50,6 +51,33 @@ type fakeTmuxRuntime struct {
 	snapshot tmuxadapter.Snapshot
 	jumped   string
 	jumpErr  error
+}
+
+type fakeSessionRuntime struct {
+	attachedName string
+	allowAttach  bool
+	project      projects.Project
+	operation    string
+	item         sessionstate.Item
+	changed      bool
+	err          error
+}
+
+func (runtime *fakeSessionRuntime) Attach(_ context.Context, name string, allowInteractive bool) (sessionstate.Item, error) {
+	runtime.attachedName, runtime.allowAttach, runtime.operation = name, allowInteractive, "attach"
+	return runtime.item, runtime.err
+}
+func (runtime *fakeSessionRuntime) Adopt(_ context.Context, project projects.Project) (sessionstate.Item, bool, error) {
+	runtime.project, runtime.operation = project, "adopt"
+	return runtime.item, runtime.changed, runtime.err
+}
+func (runtime *fakeSessionRuntime) Stop(_ context.Context, project projects.Project) (sessionstate.Item, error) {
+	runtime.project, runtime.operation = project, "stop"
+	return runtime.item, runtime.err
+}
+func (runtime *fakeSessionRuntime) Ensure(_ context.Context, project projects.Project) (sessionstate.Item, bool, error) {
+	runtime.project, runtime.operation = project, "ensure"
+	return runtime.item, runtime.changed, runtime.err
 }
 
 type countingSecretLister struct {
@@ -137,6 +165,45 @@ func TestDashboardJumpPaneUsesTypedStableIdentifierAction(t *testing.T) {
 	var actionErr *dashboard.ActionError
 	if !errors.As(err, &actionErr) || actionErr.Code != "INVALID_ACTION" {
 		t.Fatalf("mixed jump fields were accepted: %v", err)
+	}
+}
+
+func TestDashboardSessionActionsAreTypedAndNonInteractive(t *testing.T) {
+	runtime := &fakeSessionRuntime{item: sessionstate.Item{Name: "alpha", Managed: true, Ownership: sessionstate.Managed}, changed: true}
+	service := &dashboardService{sessions: runtime}
+	result, err := service.Execute(context.Background(), dashboard.ActionRequest{Action: "attach_session", SessionName: "alpha"})
+	if err != nil || runtime.operation != "attach" || runtime.attachedName != "alpha" || runtime.allowAttach || result.Session != backend.Tmux {
+		t.Fatalf("unexpected attach: result=%#v runtime=%#v err=%v", result, runtime, err)
+	}
+	_, err = service.Execute(context.Background(), dashboard.ActionRequest{Action: "attach_session", SessionName: "alpha", ProjectID: "alpha"})
+	var actionErr *dashboard.ActionError
+	if !errors.As(err, &actionErr) || actionErr.Code != "INVALID_ACTION" {
+		t.Fatalf("mixed session fields accepted: %v", err)
+	}
+}
+
+func TestDashboardAdoptsAndStopsOnlyRegisteredProjectSessions(t *testing.T) {
+	root := t.TempDir()
+	projectPath := filepath.Join(root, "alpha")
+	if err := os.Mkdir(projectPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	paths := config.Paths{StateDir: root, ProjectsFile: filepath.Join(root, "projects.toml"), BackupsDir: filepath.Join(root, "backups")}
+	if _, _, err := projects.NewStore(paths).Add(projectPath, "alpha", "personal"); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeSessionRuntime{item: sessionstate.Item{Name: "alpha", Managed: true, Ownership: sessionstate.Managed}, changed: true}
+	service := &dashboardService{paths: paths, sessions: runtime}
+	if _, err := service.Execute(context.Background(), dashboard.ActionRequest{Action: "adopt_session", ProjectID: "alpha"}); err != nil || runtime.operation != "adopt" || runtime.project.ID != "alpha" {
+		t.Fatalf("adopt failed: runtime=%#v err=%v", runtime, err)
+	}
+	if _, err := service.Execute(context.Background(), dashboard.ActionRequest{Action: "stop_session", ProjectID: "alpha"}); err != nil || runtime.operation != "stop" {
+		t.Fatalf("stop failed: runtime=%#v err=%v", runtime, err)
+	}
+	_, err := service.Execute(context.Background(), dashboard.ActionRequest{Action: "stop_session", ProjectID: "missing"})
+	var actionErr *dashboard.ActionError
+	if !errors.As(err, &actionErr) || actionErr.Code != "PROJECT_NOT_FOUND" {
+		t.Fatalf("missing project accepted: %v", err)
 	}
 }
 
@@ -510,6 +577,7 @@ func TestDashboardOpenUsesWindowsTerminalPlatformFallback(t *testing.T) {
 
 func TestDashboardOpenUsesWindowsTerminalInWSL(t *testing.T) {
 	windowsTerminal := &dashboardStubAdapter{name: backend.WindowsTerminal, available: true}
+	tmux := &dashboardStubAdapter{name: backend.Tmux, available: true}
 	environment := backend.Environment{GOOS: "linux", Getenv: func(key string) string {
 		if key == "WSL_DISTRO_NAME" {
 			return "Ubuntu"
@@ -517,7 +585,7 @@ func TestDashboardOpenUsesWindowsTerminalInWSL(t *testing.T) {
 		return ""
 	}}
 	request := backend.OpenRequest{Project: projects.Project{ID: "alpha", DefaultBackend: "auto"}, Profile: config.DefaultProfile()}
-	registry := backend.NewRegistry(environment, windowsTerminal)
+	registry := backend.NewRegistry(environment, windowsTerminal, tmux)
 
 	selection, err := selectDashboardOpenBackend(context.Background(), registry, request, backend.Auto, environment)
 	if err != nil {
@@ -551,14 +619,14 @@ func TestDashboardOpenSkipsPriorityCMUXOverSSH(t *testing.T) {
 	}
 }
 
-func TestDashboardOpenRejectsExplicitInteractiveBackend(t *testing.T) {
+func TestDashboardOpenRequiresWSLForExplicitTmuxSession(t *testing.T) {
 	tmux := &dashboardStubAdapter{name: backend.Tmux, available: true}
 	environment := backend.Environment{GOOS: "darwin", Getenv: func(string) string { return "" }}
 	request := backend.OpenRequest{Project: projects.Project{ID: "alpha"}, Profile: config.DefaultProfile()}
 	registry := backend.NewRegistry(environment, tmux)
 
 	_, err := selectDashboardOpenBackend(context.Background(), registry, request, backend.Tmux, environment)
-	if err == nil || !strings.Contains(err.Error(), "supports only cmux or Windows Terminal") {
+	if err == nil || !strings.Contains(err.Error(), "requires WSL with Windows Terminal") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -44,15 +44,15 @@ func (executor *fakeExecutor) Run(_ context.Context, request backend.ProcessRequ
 
 func TestSnapshotParsesStableTmuxHierarchy(t *testing.T) {
 	sep := snapshotSeparator
-	output := "$1" + sep + "zeta" + sep + "0" + sep + "@4" + sep + "2" + sep + "api" + sep + "0" + sep + "%8" + sep + "1" + sep + "0" + sep + "900" + sep + "/repo/api" + sep + "nvim" + sep + "0\n" +
-		"$0" + sep + "alpha" + sep + "1" + sep + "@2" + sep + "0" + sep + "main" + sep + "1" + sep + "%3" + sep + "0" + sep + "1" + sep + "700" + sep + "/repo" + sep + "codex" + sep + "0\n"
+	output := "$1" + sep + "zeta" + sep + "0" + sep + "" + sep + "" + sep + "" + sep + "@4" + sep + "2" + sep + "api" + sep + "0" + sep + "%8" + sep + "1" + sep + "0" + sep + "900" + sep + "/repo/api" + sep + "nvim" + sep + "0\n" +
+		"$0" + sep + "alpha" + sep + "1" + sep + "1" + sep + "alpha" + sep + "/repo" + sep + "@2" + sep + "0" + sep + "main" + sep + "1" + sep + "%3" + sep + "0" + sep + "1" + sep + "700" + sep + "/repo" + sep + "codex" + sep + "0\n"
 	executor := &fakeExecutor{results: []backend.ProcessResult{{Stdout: output}}}
 	snapshot := New(executor, func(string) string { return "" }).Snapshot(context.Background())
 	if !snapshot.Available || len(snapshot.Sessions) != 2 {
 		t.Fatalf("unexpected snapshot: %#v", snapshot)
 	}
 	alpha := snapshot.Sessions[0]
-	if alpha.ID != "$0" || alpha.Name != "alpha" || !alpha.Attached || alpha.Windows[0].ID != "@2" || alpha.Windows[0].Panes[0].ID != "%3" {
+	if alpha.ID != "$0" || alpha.Name != "alpha" || !alpha.Attached || !alpha.Managed || alpha.ProjectID != "alpha" || alpha.Windows[0].ID != "@2" || alpha.Windows[0].Panes[0].ID != "%3" {
 		t.Fatalf("stable identifiers were not preserved: %#v", alpha)
 	}
 	pane := alpha.Windows[0].Panes[0]
@@ -64,7 +64,7 @@ func TestSnapshotParsesStableTmuxHierarchy(t *testing.T) {
 func TestSnapshotHandlesInterleavedRowsForSameWindow(t *testing.T) {
 	sep := snapshotSeparator
 	row := func(windowID, windowIndex, paneID, paneIndex string) string {
-		return "$0" + sep + "alpha" + sep + "1" + sep + windowID + sep + windowIndex + sep + "window" + sep + "0" + sep + paneID + sep + paneIndex + sep + "0" + sep + "700" + sep + "/repo" + sep + "zsh" + sep + "0"
+		return "$0" + sep + "alpha" + sep + "1" + sep + "" + sep + "" + sep + "" + sep + windowID + sep + windowIndex + sep + "window" + sep + "0" + sep + paneID + sep + paneIndex + sep + "0" + sep + "700" + sep + "/repo" + sep + "zsh" + sep + "0"
 	}
 	output := strings.Join([]string{row("@2", "0", "%3", "0"), row("@3", "1", "%4", "0"), row("@2", "0", "%5", "1")}, "\n")
 	snapshot := New(&fakeExecutor{results: []backend.ProcessResult{{Stdout: output}}}, nil).Snapshot(context.Background())
@@ -136,31 +136,31 @@ func TestJumpRejectsUnverifiedSessionName(t *testing.T) {
 }
 
 func TestInsideTmuxCreatesMissingSessionThenSwitches(t *testing.T) {
-	executor := &fakeExecutor{}
+	path := t.TempDir()
+	canonicalPath, err := projects.CanonicalPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := managedOpenExecutor("alpha", canonicalPath)
 	adapter := New(executor, func(key string) string {
 		if key == "TMUX" {
 			return "/tmp/tmux,1,0"
 		}
 		return ""
 	})
-	path := t.TempDir()
-	canonicalPath, err := projects.CanonicalPath(path)
-	if err != nil {
-		t.Fatal(err)
-	}
 	result, err := adapter.OpenProject(context.Background(), backend.OpenRequest{Project: projects.Project{ID: "alpha", Path: path}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(executor.requests) != 3 {
+	if len(executor.requests) != 11 {
 		t.Fatalf("unexpected calls: %#v", executor.requests)
 	}
 	wantCreate := []string{"new-session", "-d", "-s", "alpha", "-c", canonicalPath}
 	if !reflect.DeepEqual(executor.requests[1].Args, wantCreate) {
 		t.Fatalf("unexpected create args: %v", executor.requests[1].Args)
 	}
-	if !reflect.DeepEqual(executor.requests[2].Args, []string{"switch-client", "-t", "=alpha"}) {
-		t.Fatalf("unexpected switch args: %v", executor.requests[2].Args)
+	if !reflect.DeepEqual(executor.requests[10].Args, []string{"switch-client", "-t", "=alpha:"}) {
+		t.Fatalf("unexpected switch args: %v", executor.requests[10].Args)
 	}
 	if result.Reference != "tmux:alpha" {
 		t.Fatalf("unexpected reference: %s", result.Reference)
@@ -168,19 +168,31 @@ func TestInsideTmuxCreatesMissingSessionThenSwitches(t *testing.T) {
 }
 
 func TestOutsideTmuxUsesAttachOrCreateArgumentArray(t *testing.T) {
-	executor := &fakeExecutor{}
-	adapter := New(executor, func(string) string { return "" })
 	path := t.TempDir()
 	canonicalPath, err := projects.CanonicalPath(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	executor := managedOpenExecutor("alpha", canonicalPath)
+	adapter := New(executor, func(string) string { return "" })
 	_, err = adapter.OpenProject(context.Background(), backend.OpenRequest{Project: projects.Project{ID: "alpha", Path: path}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"new-session", "-A", "-s", "alpha", "-c", canonicalPath}
-	if len(executor.requests) != 1 || !reflect.DeepEqual(executor.requests[0].Args, want) || !executor.requests[0].Interactive {
+	want := []string{"attach-session", "-t", "=alpha:"}
+	if len(executor.requests) != 11 || !reflect.DeepEqual(executor.requests[10].Args, want) || !executor.requests[10].Interactive {
 		t.Fatalf("unexpected process request: %#v", executor.requests)
+	}
+}
+
+func managedOpenExecutor(projectID, canonicalPath string) *fakeExecutor {
+	return &fakeExecutor{
+		results: []backend.ProcessResult{
+			{ExitCode: 1}, {}, {}, {}, {},
+			{Stdout: projectID + "\t0\t1\n"},
+			{Stdout: "1\n"}, {Stdout: projectID + "\n"}, {Stdout: canonicalPath + "\n"},
+			{Stdout: canonicalPath + "\n"},
+		},
+		errors: []error{errors.New("session missing")},
 	}
 }

@@ -1,7 +1,8 @@
 # Local Dashboard
 
-The Dashboard is a client of the Workbench core. It does not become a daemon or
-a second state owner and does not parse browser-side copies of registry files.
+The Dashboard is a client of the Workbench core. It is not a second state owner
+and does not parse browser-side copies of registry files. It may run in the
+foreground or as an explicitly started background process.
 
 The embedded web surface has two product routes:
 
@@ -20,12 +21,19 @@ wb dashboard
 wb dashboard --open browser
 wb dashboard --open cmux
 wb dashboard --open none --port 0
+wb server start --open browser
+wb server status
+wb server stop
 ```
 
 The default `auto` target uses the cmux browser on macOS when cmux is available
 and otherwise asks the platform default browser to open the URL. An opener
 failure prints the loopback URL for manual use while the server remains active.
 `Ctrl-C` or `SIGTERM` shuts down the HTTP server and closes its listener.
+`wb server start` writes a mode-0600 runtime record and log in the Workbench
+state directory, verifies readiness through an authenticated loopback probe,
+and returns. `status` rejects stale or PID-reused records; `stop` uses the
+runtime-only control token for graceful shutdown.
 
 `--port 0` asks the operating system for an available port. A fixed port must be
 between 0 and 65535. Binding is always `127.0.0.1`; a wildcard or externally
@@ -38,7 +46,8 @@ reachable address is not configurable.
 - projects from the project store;
 - a read-only `contexts` projection with registry availability, environment metadata, project links, export key names,
   and secret-reference availability status;
-- a live, read-only tmux session/window/pane hierarchy using stable tmux IDs;
+- a live tmux session/window/pane hierarchy using stable tmux IDs and explicit
+  managed, legacy, or foreign ownership;
 - reconciled managed Agent records and snapshot-only observed tmux Tasks;
 - Git-verified linked worktrees;
 - per-project branch and porcelain change summaries;
@@ -115,7 +124,10 @@ for narrow screens, and print styles remove the navigation chrome.
 
 | Action | Required fields | Boundary |
 |---|---|---|
-| `open_project` | `project_id`, optional `backend` | cmux or Windows Terminal only; `auto` ignores interactive tmux/shell preferences |
+| `open_project` | `project_id`, optional `backend` | cmux, Windows Terminal, or WSL tmux-session/Windows-Terminal-surface combination |
+| `attach_session` | `session_name` | exact session; non-interactive and therefore requires the server to run inside tmux |
+| `adopt_session` | `project_id` | legacy session only after registered name and canonical start path verification |
+| `stop_session` | `project_id` | re-reads complete Workbench ownership before killing the exact session |
 | `start_agent` | `project_id`, `agent_kind`, optional `backend` | detached tmux/cmux/Windows Terminal runtime |
 | `jump_agent` | `task_id` | registered active task only |
 | `stop_agent` | `task_id` | registered ownership revalidation; UI confirmation |
@@ -127,10 +139,12 @@ for narrow screens, and print styles remove the navigation chrome.
 
 Shell-backed project open and Agent launch are refused because an interactive
 child would block the Dashboard request and has no browser attachment target.
-The tmux observer never creates sessions or writes a parallel registry. A missing
-tmux executable or server is reported as optional unavailable snapshot data. A
-Dashboard pane jump is refused when the Dashboard process is not running inside
-tmux; use `wb sessions jump <pane-id>` from a terminal to attach instead.
+The observer itself never creates sessions or writes a parallel registry;
+project, Agent, workflow, and explicit session actions use the managed-session
+service. A missing tmux executable or server is reported as optional unavailable
+snapshot data. A Dashboard pane or session attach is refused when the Dashboard
+process is not running inside tmux; use `wb sessions jump <pane-id>` or
+`wb sessions attach <name>` from a terminal instead.
 There is no arbitrary command, path, prompt, argument, environment, or force-delete
 field. Terminal Agent records are separated from active tasks and cannot invoke
 Jump or Stop. Observed Tasks can Jump only after a fresh tmux snapshot and

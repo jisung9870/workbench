@@ -33,10 +33,13 @@ type Capability struct {
 type OpenRequest struct {
 	Project projects.Project
 	Profile config.Profile
+	Session Name
 }
 
 type OpenResult struct {
 	Backend   Name     `json:"backend"`
+	Session   Name     `json:"session,omitempty"`
+	Surface   Name     `json:"surface,omitempty"`
 	Reference string   `json:"reference"`
 	Command   []string `json:"command"`
 	ExitCode  int      `json:"exit_code"`
@@ -90,6 +93,8 @@ func NewRegistry(environment Environment, adapters ...Adapter) *Registry {
 type Selection struct {
 	Adapter  Adapter
 	Warnings []string
+	Session  Name
+	Surface  Name
 }
 
 type UnavailableError struct {

@@ -227,9 +227,29 @@ function renderTmux(tmux) {
     $("tmux-sessions").innerHTML = "";
     return;
   }
-  $("tmux-sessions").innerHTML = sessions.map(session => `<section class="session-card"><div class="session-head"><strong>${esc(session.name)}</strong><span>${session.attached ? "attached" : "detached"} · ${esc(session.id)}</span></div>${session.windows.map(window => `<div class="window-row"><span>${window.index}:${esc(window.name)} · ${esc(window.id)}</span>${window.panes.map(pane => `<button type="button" class="pane-jump" data-pane-id="${esc(pane.id)}" title="Jump to ${esc(pane.id)}"><strong>${esc(pane.current_command || "shell")}</strong><small>${esc(pane.id)} · ${esc(pane.current_path)}</small></button>`).join("")}</div>`).join("")}</section>`).join("") || '<div class="row"><span>No tmux sessions</span></div>';
+  const projectIDs = new Set((state.snapshot?.projects || []).map(project => project.id));
+  $("tmux-sessions").innerHTML = sessions.map(session => {
+    const ownership = session.ownership || "legacy";
+    const projectID = session.project_id || (projectIDs.has(session.name) ? session.name : "");
+    const canAdopt = ownership === "legacy" && projectID === session.name;
+    const actions = `<div class="session-actions"><button type="button" data-session-action="attach_session" data-session-name="${esc(session.name)}">Attach</button>${canAdopt ? `<button type="button" data-session-action="adopt_session" data-project-id="${esc(projectID)}">Adopt</button>` : ""}${session.managed && projectID ? `<button type="button" class="danger" data-session-action="stop_session" data-project-id="${esc(projectID)}">Stop</button>` : ""}</div>`;
+    const project = projectID ? ` · ${esc(projectID)}` : "";
+    return `<section class="session-card"><div class="session-head"><strong>${esc(session.name)}</strong><span class="status ${esc(ownership)}">${esc(ownership)}</span></div><div class="session-meta"><span>${session.attached ? "attached" : "detached"} · ${esc(session.id)}${project}</span>${actions}</div>${session.windows.map(window => `<div class="window-row"><span>${window.index}:${esc(window.name)} · ${esc(window.id)}</span>${window.panes.map(pane => `<button type="button" class="pane-jump" data-pane-id="${esc(pane.id)}" title="Jump to ${esc(pane.id)}"><strong>${esc(pane.current_command || "shell")}</strong><small>${esc(pane.id)} · ${esc(pane.current_path)}</small></button>`).join("")}</div>`).join("")}</section>`;
+  }).join("") || '<div class="row"><span>No tmux sessions</span></div>';
   document.querySelectorAll("[data-pane-id]").forEach(button => {
     button.onclick = () => action({ action: "jump_pane", pane_id: button.dataset.paneId });
+  });
+  document.querySelectorAll("[data-session-action]").forEach(button => {
+    button.onclick = () => {
+      const actionName = button.dataset.sessionAction;
+      const projectID = button.dataset.projectId;
+      if (actionName === "adopt_session" && !window.confirm(`Adopt tmux session ${projectID} as a Workbench-managed project session?`)) return;
+      if (actionName === "stop_session" && !window.confirm(`Stop managed tmux session ${projectID}? All processes in the session will end.`)) return;
+      const payload = { action: actionName };
+      if (button.dataset.sessionName) payload.session_name = button.dataset.sessionName;
+      if (projectID) payload.project_id = projectID;
+      action(payload);
+    };
   });
 }
 

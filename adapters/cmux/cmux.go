@@ -55,7 +55,7 @@ func (adapter *Adapter) OpenProject(ctx context.Context, request backend.OpenReq
 
 func (adapter *Adapter) result(projectID string, process backend.ProcessResult) backend.OpenResult {
 	return backend.OpenResult{
-		Backend: adapter.Name(), Reference: "cmux:" + projectID, Command: process.Command,
+		Backend: adapter.Name(), Surface: adapter.Name(), Reference: "cmux:" + projectID, Command: process.Command,
 		ExitCode: process.ExitCode, Stdout: process.Stdout, Stderr: process.Stderr,
 	}
 }

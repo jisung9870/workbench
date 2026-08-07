@@ -187,6 +187,10 @@ h3 { font-size: 17px; margin-bottom: 0; }
 .session-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .session-head strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 .session-head span, .window-row > span { color: var(--muted); font-size: 10px; }
+.session-meta { display: flex; justify-content: space-between; gap: 8px; align-items: center; color: var(--muted); font-size: 10px; }
+.session-actions { display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+.session-actions button { padding: 5px 7px; font-size: 9px; }
+.session-actions .danger { color: var(--warn); }
 .window-row { display: grid; gap: 5px; padding-top: 6px; border-top: 1px solid var(--line); }
 .pane-jump { display: grid; gap: 2px; min-width: 0; padding: 7px 8px; text-align: left; background: var(--surface); }
 .pane-jump strong, .pane-jump small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

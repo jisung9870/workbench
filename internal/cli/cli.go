@@ -32,6 +32,7 @@ import (
 	"github.com/jisung9870/workbench/internal/output"
 	"github.com/jisung9870/workbench/internal/projects"
 	"github.com/jisung9870/workbench/internal/secrets"
+	sessionstate "github.com/jisung9870/workbench/internal/sessions"
 	"github.com/jisung9870/workbench/internal/tasks"
 	"github.com/jisung9870/workbench/internal/workflows"
 	"github.com/jisung9870/workbench/internal/worktrees"
@@ -61,14 +62,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 }
 
 func RunWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if handled, code := handleHelp(args, stdout, stderr); handled {
+		return code
+	}
+	if handled, code := handleCompletion(args, stdout, stderr); handled {
+		return code
+	}
 	jsonMode := contains(args, "--json")
 	paths, err := config.ResolvePaths()
 	if err != nil {
 		return report(stdout, stderr, jsonMode, &commandError{ExitCode: ExitArgument, Code: "CONFIG_INVALID", Message: err.Error()})
-	}
-	if len(args) == 0 {
-		fmt.Fprint(stderr, usage())
-		return ExitArgument
 	}
 	var commandErr *commandError
 	switch args[0] {
@@ -91,7 +94,7 @@ func RunWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	case "tasks":
 		commandErr = runTasks(args[1:], paths, stdout, stderr)
 	case "sessions":
-		commandErr = runSessions(args[1:], stdout, stderr)
+		commandErr = runSessions(args[1:], paths, stdout, stderr)
 	case "overview":
 		commandErr = runOverview(args[1:], paths, stdout, stderr)
 	case "workflows":
@@ -102,9 +105,8 @@ func RunWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		commandErr = runDoctor(args[1:], paths, stdout, stderr)
 	case "dashboard":
 		commandErr = runDashboard(args[1:], paths, stdout, stderr)
-	case "help", "--help", "-h":
-		fmt.Fprint(stdout, usage())
-		return ExitOK
+	case "server":
+		commandErr = runServer(args[1:], paths, stdout, stderr)
 	default:
 		commandErr = invalid("unknown command %q", args[0])
 	}
@@ -419,12 +421,13 @@ func runTasks(args []string, paths config.Paths, stdout, stderr io.Writer) *comm
 	}
 }
 
-func runSessions(args []string, stdout, stderr io.Writer) *commandError {
+func runSessions(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
 	if len(args) == 0 {
 		return invalid("sessions subcommand is required")
 	}
 	executor := &backend.OSExecutor{Stdin: os.Stdin, Stdout: stdout, Stderr: stderr}
 	observer := tmuxadapter.New(executor, os.Getenv)
+	manager := sessionstate.NewManager(executor, os.Getenv)
 	switch args[0] {
 	case "list":
 		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
@@ -451,7 +454,7 @@ func runSessions(args []string, stdout, stderr io.Writer) *commandError {
 			if session.Attached {
 				attached = "attached"
 			}
-			fmt.Fprintf(stdout, "%s\t%s\t%s\n", session.ID, session.Name, attached)
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", session.ID, session.Name, attached, session.Ownership, session.ProjectID)
 			for _, window := range session.Windows {
 				for _, pane := range window.Panes {
 					fmt.Fprintf(stdout, "  %s\t%s:%d.%d\t%s\t%s\n", pane.ID, session.Name, window.Index, pane.Index, pane.CurrentCommand, pane.CurrentPath)
@@ -468,9 +471,113 @@ func runSessions(args []string, stdout, stderr io.Writer) *commandError {
 		}
 		fmt.Fprintf(stdout, "jumped to tmux pane %s\n", args[1])
 		return nil
+	case "show":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) != 1 {
+			return invalid("usage: wb sessions show <session-name> [--json]")
+		}
+		item, err := manager.Show(context.Background(), positionals[0])
+		if err != nil {
+			return sessionError(err)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"session": item}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		writeSession(stdout, item)
+		return nil
+	case "attach":
+		if len(args) != 2 || strings.HasPrefix(args[1], "-") {
+			return invalid("usage: wb sessions attach <session-name>")
+		}
+		item, err := manager.Attach(context.Background(), args[1], true)
+		if err != nil {
+			return sessionError(err)
+		}
+		fmt.Fprintf(stdout, "attached to tmux session %s (%s)\n", item.Name, item.Ownership)
+		return nil
+	case "adopt":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) != 1 {
+			return invalid("usage: wb sessions adopt <project-id> [--json]")
+		}
+		project, commandErr := sessionProject(paths, positionals[0])
+		if commandErr != nil {
+			return commandErr
+		}
+		item, changed, err := manager.Adopt(context.Background(), project)
+		if err != nil {
+			return sessionError(err)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"session": item, "adopted": changed}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		if changed {
+			fmt.Fprintf(stdout, "adopted tmux session %s for project %s\n", item.Name, project.ID)
+		} else {
+			fmt.Fprintf(stdout, "tmux session %s is already managed\n", item.Name)
+		}
+		return nil
+	case "stop":
+		positionals, options, parseErr := parseOptions(args[1:], map[string]bool{"--json": false})
+		if parseErr != nil || len(positionals) != 1 {
+			return invalid("usage: wb sessions stop <project-id> [--json]")
+		}
+		project, commandErr := sessionProject(paths, positionals[0])
+		if commandErr != nil {
+			return commandErr
+		}
+		item, err := manager.Stop(context.Background(), project)
+		if err != nil {
+			return sessionError(err)
+		}
+		if _, jsonMode := options["--json"]; jsonMode {
+			if err := output.Write(stdout, map[string]any{"session": item, "stopped": true}, nil); err != nil {
+				return generalError(err)
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "stopped managed tmux session %s\n", item.Name)
+		return nil
 	default:
 		return invalid("unknown sessions subcommand %q", args[0])
 	}
+}
+
+func sessionProject(paths config.Paths, projectID string) (projects.Project, *commandError) {
+	project, found, err := projects.NewStore(paths).Show(projectID)
+	if err != nil {
+		return projects.Project{}, configError(err)
+	}
+	if !found {
+		return projects.Project{}, &commandError{ExitCode: ExitGeneral, Code: "PROJECT_NOT_FOUND", Message: fmt.Sprintf("project %q was not found", projectID), Details: map[string]any{"project_id": projectID}}
+	}
+	return project, nil
+}
+
+func sessionError(err error) *commandError {
+	var unavailable *backend.UnavailableError
+	if errors.As(err, &unavailable) {
+		return &commandError{ExitCode: ExitUnavailable, Code: "BACKEND_UNAVAILABLE", Message: err.Error()}
+	}
+	var notFound *sessionstate.NotFoundError
+	if errors.As(err, &notFound) {
+		return &commandError{ExitCode: ExitGeneral, Code: "SESSION_NOT_FOUND", Message: err.Error(), Details: map[string]any{"session": notFound.Name}}
+	}
+	var conflict *sessionstate.ConflictError
+	if errors.As(err, &conflict) {
+		return &commandError{ExitCode: ExitConflict, Code: "SESSION_CONFLICT", Message: err.Error()}
+	}
+	return generalError(err)
+}
+
+func writeSession(stdout io.Writer, item sessionstate.Item) {
+	fmt.Fprintf(stdout, "name: %s\nownership: %s\nmanaged: %t\nproject_id: %s\nproject_path: %s\nstart_path: %s\nattached_clients: %d\nwindows: %d\n", item.Name, item.Ownership, item.Managed, item.ProjectID, item.ProjectPath, item.StartPath, item.Attached, item.Windows)
 }
 
 func runDoctor(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
@@ -833,9 +940,9 @@ func worktreeError(err error, stderr io.Writer) *commandError {
 }
 
 func runOpen(args []string, paths config.Paths, stdout, stderr io.Writer) *commandError {
-	positionals, options, parseErr := parseOptions(args, map[string]bool{"--backend": true, "--window": true, "--terminal-mode": true})
+	positionals, options, parseErr := parseOptions(args, map[string]bool{"--backend": true, "--session": true, "--window": true, "--terminal-mode": true})
 	if parseErr != nil || len(positionals) != 1 {
-		return invalid("usage: wb open <project-id> [--backend <backend>] [--window <last|new|id>] [--terminal-mode <mode>]")
+		return invalid("usage: wb open <project-id> [--backend <backend>] [--session none|tmux] [--window <last|new|id>] [--terminal-mode <mode>]")
 	}
 	requested := backend.Auto
 	if value := options["--backend"]; value != "" {
@@ -882,7 +989,15 @@ func runOpen(args []string, paths config.Paths, stdout, stderr io.Writer) *comma
 		cmuxadapter.New(executor, runtime.GOOS),
 		wtadapter.New(executor, wtadapter.Environment{GOOS: runtime.GOOS, Getenv: os.Getenv}),
 	)
-	request := backend.OpenRequest{Project: project, Profile: profile}
+	session := backend.Name("")
+	switch options["--session"] {
+	case "", "none":
+	case "tmux":
+		session = backend.Tmux
+	default:
+		return invalid("invalid session backend %q", options["--session"])
+	}
+	request := backend.OpenRequest{Project: project, Profile: profile, Session: session}
 	selection, selectErr := registry.Select(context.Background(), request, requested)
 	if selectErr != nil {
 		var unavailable *backend.UnavailableError
@@ -901,8 +1016,16 @@ func runOpen(args []string, paths config.Paths, stdout, stderr io.Writer) *comma
 	if (windowOverride || modeOverride) && selection.Adapter.Name() != backend.WindowsTerminal {
 		return invalid("--window and --terminal-mode require the Windows Terminal backend")
 	}
+	if session != "" && selection.Adapter.Name() != backend.WindowsTerminal {
+		return invalid("--session tmux currently requires the Windows Terminal backend")
+	}
 	for _, warning := range selection.Warnings {
 		fmt.Fprintf(stderr, "warning: %s\n", warning)
+	}
+	if session == backend.Tmux {
+		if _, _, ensureErr := sessionstate.NewManager(executor, os.Getenv).Ensure(context.Background(), project); ensureErr != nil {
+			return sessionError(ensureErr)
+		}
 	}
 	result, openErr := selection.Adapter.OpenProject(context.Background(), request)
 	if result.Stdout != "" {
@@ -918,7 +1041,11 @@ func runOpen(args []string, paths config.Paths, stdout, stderr io.Writer) *comma
 			Details: map[string]any{"backend": result.Backend, "reference": result.Reference, "exit_code": result.ExitCode, "command": result.Command},
 		}
 	}
-	fmt.Fprintf(stdout, "opened %s with %s (%s)\n", project.ID, result.Backend, result.Reference)
+	if result.Session != "" {
+		fmt.Fprintf(stdout, "opened %s session %s on %s (%s)\n", project.ID, result.Session, result.Surface, result.Reference)
+	} else {
+		fmt.Fprintf(stdout, "opened %s with %s (%s)\n", project.ID, result.Backend, result.Reference)
+	}
 	return nil
 }
 
@@ -1877,7 +2004,7 @@ Usage:
   wb secrets get <service> [field]
   wb secrets remove <service> [field] [--yes] [--json]
   wb secrets migrate check|apply [--json]
-  wb open <project-id> [--backend <backend>] [--window <last|new|id>] [--terminal-mode <tab|split-auto|split-horizontal|split-vertical>]
+  wb open <project-id> [--backend <backend>] [--session none|tmux] [--window <last|new|id>] [--terminal-mode <tab|split-auto|split-horizontal|split-vertical>]
   wb worktrees list <project-id> [--json]
   wb worktrees create <project-id> <branch> [--base <ref>]
   wb worktrees remove <worktree-id> [--delete-branch]

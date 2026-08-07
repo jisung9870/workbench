@@ -487,7 +487,7 @@ func TestWorkflowCatalogJSONAndDisallowedID(t *testing.T) {
 func TestSessionsJSONTreatsMissingTmuxAsOptionalUnavailable(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	var stdout, stderr bytes.Buffer
-	if err := runSessions([]string{"list", "--json"}, &stdout, &stderr); err != nil {
+	if err := runSessions([]string{"list", "--json"}, config.Paths{}, &stdout, &stderr); err != nil {
 		t.Fatalf("optional tmux observation failed: %v", err)
 	}
 	var envelope output.Envelope

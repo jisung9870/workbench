@@ -45,6 +45,17 @@ wb open terraform-lab --backend windows-terminal --window last --terminal-mode s
 Workbench rejects these options if another backend is selected. It never
 accepts a free-form Windows Terminal command fragment.
 
+Inside WSL, the CLI can separate the persistent session from the visible
+terminal surface:
+
+```bash
+wb open terraform-lab --backend windows-terminal --session tmux
+```
+
+Workbench first ensures the managed project-ID tmux session, then opens Windows
+Terminal and runs `tmux attach-session` against that exact session. Native
+Windows projects without an explicit WSL overlay reject `--session tmux`.
+
 ## Native and WSL paths
 
 A native Windows project launches with `--startingDirectory` and retains its

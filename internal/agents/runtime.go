@@ -13,6 +13,7 @@ import (
 	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/sessions"
 )
 
 type LaunchRequest struct {
@@ -48,7 +49,10 @@ func (err *UnsupportedError) Error() string {
 	return fmt.Sprintf("backend %q cannot %s: %s", err.Backend, err.Operation, err.Reason)
 }
 
-type UnsafeError struct{ Message string }
+type UnsafeError struct {
+	Message           string
+	OwnershipMismatch bool
+}
 
 func (err *UnsafeError) Error() string { return err.Message }
 
@@ -110,18 +114,15 @@ func (runtime *TmuxRuntime) Detect(ctx context.Context, _ backend.OpenRequest) b
 	return backend.Capability{Backend: runtime.Name(), Available: true, Version: version, Capabilities: []string{"agents_start", "agents_jump", "agents_stop"}}
 }
 func (runtime *TmuxRuntime) Launch(ctx context.Context, request LaunchRequest) (LaunchResult, error) {
+	if _, _, err := sessions.NewManager(runtime.executor, runtime.getenv).Ensure(ctx, request.Project); err != nil {
+		return LaunchResult{ExitCode: -1}, fmt.Errorf("ensure tmux session: %w", err)
+	}
 	command, err := runtime.executor.LookPath("tmux")
 	if err != nil {
 		return LaunchResult{ExitCode: -1}, err
 	}
 	session := request.Project.ID
-	target := "=" + session
-	if _, err := runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"has-session", "-t", target}}); err != nil {
-		created, createErr := runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"new-session", "-d", "-s", session, "-c", request.Task.CWD}})
-		if createErr != nil {
-			return launchFromProcess(created, false), fmt.Errorf("create tmux session: %w", createErr)
-		}
-	}
+	target := "=" + session + ":"
 	process, err := runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{
 		"new-window", "-d", "-P", "-F", "#{pane_id}", "-t", target, "-n", request.Task.ID, "-c", request.Task.CWD, shellQuote(request.Executable),
 	}})
@@ -132,14 +133,14 @@ func (runtime *TmuxRuntime) Launch(ctx context.Context, request LaunchRequest) (
 	if !regexp.MustCompile(`^%[0-9]+$`).MatchString(pane) {
 		return launchFromProcess(process, false), fmt.Errorf("tmux returned an invalid pane reference %q", pane)
 	}
-	if err := request.OnStarted("tmux:"+pane, map[string]string{"session": session, "pane": pane}, 0); err != nil {
-		return launchFromProcess(process, false), err
-	}
 	for key, value := range map[string]string{"@workbench_task_id": request.Task.ID, "@workbench_agent_kind": request.Task.AgentKind} {
 		metadata, metadataErr := runtime.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"set-option", "-p", "-t", pane, key, value}})
 		if metadataErr != nil {
 			return launchFromProcess(metadata, false), fmt.Errorf("set tmux pane ownership metadata: %w", metadataErr)
 		}
+	}
+	if err := request.OnStarted("tmux:"+pane, map[string]string{"session": session, "pane": pane}, 0); err != nil {
+		return launchFromProcess(process, false), err
 	}
 	return launchFromProcess(process, false), nil
 }
@@ -150,6 +151,9 @@ func (runtime *TmuxRuntime) Alive(ctx context.Context, task Task) (bool, error) 
 	}
 	var unsafe *UnsafeError
 	if errors.As(err, &unsafe) {
+		if unsafe.OwnershipMismatch {
+			return false, nil
+		}
 		return false, err
 	}
 	return false, nil
@@ -189,7 +193,7 @@ func (runtime *TmuxRuntime) verify(ctx context.Context, task Task) (string, erro
 		return "", err
 	}
 	if strings.TrimSpace(result.Stdout) != task.ID {
-		return "", &UnsafeError{Message: fmt.Sprintf("tmux pane %s is not owned by task %q", pane, task.ID)}
+		return "", &UnsafeError{Message: fmt.Sprintf("tmux pane %s is not owned by task %q", pane, task.ID), OwnershipMismatch: true}
 	}
 	return command, nil
 }

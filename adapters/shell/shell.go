@@ -36,15 +36,15 @@ func (adapter *Adapter) Detect(_ context.Context, _ backend.OpenRequest) backend
 func (adapter *Adapter) OpenProject(ctx context.Context, request backend.OpenRequest) (backend.OpenResult, error) {
 	path, err := projects.CanonicalPath(request.Project.Path)
 	if err != nil {
-		return backend.OpenResult{Backend: adapter.Name(), Reference: "shell:" + request.Project.ID, ExitCode: -1}, err
+		return backend.OpenResult{Backend: adapter.Name(), Surface: adapter.Name(), Reference: "shell:" + request.Project.ID, ExitCode: -1}, err
 	}
 	command, err := adapter.shellCommand()
 	if err != nil {
-		return backend.OpenResult{Backend: adapter.Name(), Reference: "shell:" + request.Project.ID, ExitCode: -1}, err
+		return backend.OpenResult{Backend: adapter.Name(), Surface: adapter.Name(), Reference: "shell:" + request.Project.ID, ExitCode: -1}, err
 	}
 	process, runErr := adapter.executor.Run(ctx, backend.ProcessRequest{Dir: path, Name: command, Interactive: true})
 	return backend.OpenResult{
-		Backend: adapter.Name(), Reference: "shell:" + request.Project.ID, Command: process.Command,
+		Backend: adapter.Name(), Surface: adapter.Name(), Reference: "shell:" + request.Project.ID, Command: process.Command,
 		ExitCode: process.ExitCode, Stdout: process.Stdout, Stderr: process.Stderr,
 	}, runErr
 }
