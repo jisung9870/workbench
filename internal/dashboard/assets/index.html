@@ -53,6 +53,11 @@
           <section class="panel overview-panel"><div class="panel-heading"><div><span class="eyebrow">bb doctor</span><h3>Tool health</h3></div></div><div id="overview-tools" class="rows"></div></section>
         </div>
       </section>
+      <section class="panel activity-panel" aria-labelledby="activity-heading">
+        <div class="panel-heading"><div><span class="eyebrow">Bounded local event history</span><h2 id="activity-heading">Activity Center</h2></div><span id="activity-status" class="count">0 events</span></div>
+        <p class="workflow-note">State transitions only. Command output, Secret values, environment values, and filesystem paths are never recorded.</p>
+        <div id="activity-events" class="activity-events" aria-live="polite"></div>
+      </section>
       <div class="control-grid">
         <section class="panel profile-panel" aria-labelledby="profile-settings-heading">
           <div class="panel-heading"><div><span class="eyebrow">Active configuration</span><h2 id="profile-settings-heading">Profile</h2></div><span id="profile-settings-status" class="status">checking</span></div>

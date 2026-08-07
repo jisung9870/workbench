@@ -20,6 +20,7 @@ import (
 
 	binboxadapter "github.com/jisung9870/workbench/adapters/binbox"
 	tmuxadapter "github.com/jisung9870/workbench/adapters/tmux"
+	"github.com/jisung9870/workbench/internal/activity"
 	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/config"
@@ -139,6 +140,7 @@ type Snapshot struct {
 	Scheduler         scheduler.Snapshot       `json:"scheduler"`
 	Secrets           SecretCatalog            `json:"secrets"`
 	ProfileSettings   ProfileSettings          `json:"profile_settings"`
+	Activity          []activity.Event         `json:"activity"`
 }
 
 type ActionRequest struct {

@@ -6,7 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jisung9870/workbench/internal/activity"
+	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/environments"
+	"github.com/jisung9870/workbench/internal/workflows"
 )
 
 type fakeJob struct {
@@ -14,6 +17,23 @@ type fakeJob struct {
 	interval time.Duration
 	calls    int
 	err      error
+}
+
+type fakeAgentActivityLister struct{ items []agents.Task }
+
+func (lister fakeAgentActivityLister) List(string) ([]agents.Task, error) { return lister.items, nil }
+
+type fakeWorkflowActivityLister struct{ items []workflows.Result }
+
+func (lister fakeWorkflowActivityLister) List(string) ([]workflows.Result, error) {
+	return lister.items, nil
+}
+
+type fakeActivityRecorder struct{ observations []activity.Observation }
+
+func (recorder *fakeActivityRecorder) Observe(observations []activity.Observation) (int, error) {
+	recorder.observations = append([]activity.Observation(nil), observations...)
+	return len(observations), nil
 }
 
 func (job *fakeJob) ID() string              { return job.id }
@@ -66,5 +86,31 @@ func TestEnvironmentExpiryJobCountsDerivedStates(t *testing.T) {
 	details, err := job.Run(context.Background(), now)
 	if err != nil || details["total"] != 4 || details["permanent"] != 1 || details["active"] != 1 || details["expiring"] != 1 || details["expired"] != 1 {
 		t.Fatalf("details=%#v err=%v", details, err)
+	}
+}
+
+func TestActivityScanJobBuildsMetadataOnlyObservations(t *testing.T) {
+	now := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(time.Hour)
+	recorder := &fakeActivityRecorder{}
+	job := NewActivityScanJob(
+		fakeAgentActivityLister{items: []agents.Task{{ID: "agent-1", ProjectID: "project", AgentKind: "codex", State: agents.Failed, LastEventAt: now}}},
+		fakeWorkflowActivityLister{items: []workflows.Result{{ID: "run-1", WorkflowID: workflows.ProjectTest, ProjectID: "project", Status: workflows.Succeeded, FinishedAt: now}}},
+		fakeEnvironmentLister{items: []environments.Environment{{ID: "dev", ExpiresAt: &expiresAt}}},
+		recorder,
+		time.Minute,
+	)
+	details, err := job.Run(context.Background(), now)
+	if err != nil || details["observed"] != 3 || details["emitted"] != 3 {
+		t.Fatalf("details=%#v err=%v", details, err)
+	}
+	if len(recorder.observations) != 3 {
+		t.Fatalf("observations=%#v", recorder.observations)
+	}
+	if recorder.observations[0].Severity != "error" || recorder.observations[0].ProjectID != "project" || recorder.observations[0].State != "failed" {
+		t.Fatalf("agent observation=%#v", recorder.observations[0])
+	}
+	if recorder.observations[2].Severity != "warning" || !recorder.observations[2].EmitInitial || recorder.observations[2].State != "expiring" {
+		t.Fatalf("environment observation=%#v", recorder.observations[2])
 	}
 }

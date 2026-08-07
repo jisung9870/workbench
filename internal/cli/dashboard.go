@@ -21,6 +21,7 @@ import (
 	shelladapter "github.com/jisung9870/workbench/adapters/shell"
 	tmuxadapter "github.com/jisung9870/workbench/adapters/tmux"
 	wtadapter "github.com/jisung9870/workbench/adapters/windows_terminal"
+	"github.com/jisung9870/workbench/internal/activity"
 	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/config"
@@ -200,6 +201,11 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 			profileSettings.Values = profile
 		}
 	}
+	activityItems, activityErr := activity.NewStore(service.paths).List()
+	if activityErr != nil {
+		warnings = append(warnings, fmt.Sprintf("activity history: %v", activityErr))
+		activityItems = []activity.Event{}
+	}
 	sort.Strings(warnings)
 	return dashboard.Snapshot{
 		GeneratedAt: generatedAt, Platform: doctorReport.Platform, Profile: doctorReport.Profile,
@@ -211,6 +217,7 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 		Scheduler:       service.schedulerSnapshot(),
 		Secrets:         secretCatalog,
 		ProfileSettings: profileSettings,
+		Activity:        activityItems,
 	}, nil
 }
 

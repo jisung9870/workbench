@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jisung9870/workbench/internal/activity"
+	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/dashboard"
@@ -24,6 +26,7 @@ import (
 	"github.com/jisung9870/workbench/internal/output"
 	"github.com/jisung9870/workbench/internal/scheduler"
 	"github.com/jisung9870/workbench/internal/storage"
+	"github.com/jisung9870/workbench/internal/workflows"
 )
 
 const (
@@ -313,7 +316,11 @@ func runServerServe(args []string, paths config.Paths, stdout, stderr io.Writer)
 		_ = removeServerState(statePath, state.InstanceID)
 		return generalError(err)
 	}
-	runner, err := scheduler.New(scheduler.NewEnvironmentExpiryJob(environments.NewStore(paths), time.Minute))
+	environmentStore := environments.NewStore(paths)
+	runner, err := scheduler.New(
+		scheduler.NewEnvironmentExpiryJob(environmentStore, time.Minute),
+		scheduler.NewActivityScanJob(agents.NewStateStore(paths), workflows.NewStore(paths), environmentStore, activity.NewStore(paths), time.Minute),
+	)
 	if err != nil {
 		_ = listener.Close()
 		_ = removeServerState(statePath, state.InstanceID)

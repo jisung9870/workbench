@@ -465,8 +465,12 @@ requests without the per-process token are rejected; no arbitrary shell command
 field is exposed.
 
 When started with `wb server start`, the Dashboard also shows the scheduler and
-its `environment-expiry-scan` job. The scan runs immediately and once per minute,
-reports expiry counts, and never deletes registry or Secret data.
+its `environment-expiry-scan` and `activity-scan` jobs. They run immediately and
+once per minute. The first reports expiry counts; the second records bounded
+Agent, workflow, and Environment expiry state transitions for the Activity
+Center. The 200-event local history contains metadata only—never command output,
+Secret or environment values, or filesystem paths—and neither job deletes
+registry or Secret data.
 
 The selected-project Context panel can update AWS/Kubernetes metadata, expiry,
 ordinary exports, and Secret references through typed mutations. Existing
@@ -479,7 +483,9 @@ Light or Dark explicitly. The preference is stored only in browser localStorage.
 The same loopback server exposes an offline, searchable product guide at
 `/guide`; use the **Guide** link in the top navigation after starting the
 Dashboard. See [docs/dashboard.md](docs/dashboard.md) for routes, security, and
-verification details.
+verification details. Future sessions should start with
+[docs/handoff.md](docs/handoff.md) for the verified baseline, remaining phases,
+security boundaries, and continuation commands.
 
 ## Development
 

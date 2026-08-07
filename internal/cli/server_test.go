@@ -130,6 +130,11 @@ func TestServerServeStatusAndStopLifecycle(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
+		select {
+		case serveErr := <-done:
+			t.Fatalf("server exited before becoming ready: %v", serveErr)
+		default:
+		}
 		current, found, err := loadServerState(statePath)
 		if err != nil {
 			t.Fatal(err)

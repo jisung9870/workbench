@@ -86,6 +86,7 @@ function render() {
 
   renderTmux(data.tmux || { available: false, reason: "tmux observation unavailable", sessions: [] });
   renderScheduler(data.scheduler || { available: false, running: false, reason: "scheduler unavailable", jobs: [] });
+  renderActivity(data.activity || []);
   renderProfileSettings(data.profile_settings || { available: false, reason: "Profile unavailable" });
   renderTools(data.tool_health || { available: false, reason: "Tool health unavailable", capabilities: [] });
   renderSecrets(data.secrets || { available: false, reason: "Secret store unavailable", entries: [] });
@@ -153,6 +154,16 @@ function render() {
   });
   $("workflow-history").innerHTML = workflowHistory.length ? workflowHistory.slice(0, 8).map(run => `<div class="row"><strong>${esc(run.workflow_id)}</strong><span class="status ${esc(run.status)}">${esc(run.status)}</span><small>${esc(new Date(run.finished_at).toLocaleString())}${run.output_truncated ? " · output capped" : ""}</small></div>`).join("") : '<div class="row"><span>No workflow runs recorded</span></div>';
   renderTask();
+}
+
+function renderActivity(events) {
+  const items = Array.isArray(events) ? events : [];
+  const attention = items.filter(item => item.severity === "warning" || item.severity === "error").length;
+  $("activity-status").textContent = `${items.length} event${items.length === 1 ? "" : "s"}${attention ? ` · ${attention} attention` : ""}`;
+  $("activity-events").innerHTML = items.length ? items.slice(0, 20).map(item => {
+    const scope = item.project_id || item.resource_id;
+    return `<article class="activity-event ${esc(item.severity)}"><span class="activity-marker" aria-hidden="true"></span><div><div class="activity-title"><strong>${esc(item.title)}</strong><span class="status ${esc(item.severity)}">${esc(item.severity)}</span></div><small>${esc(item.kind)} · ${esc(scope)} · ${esc(new Date(item.occurred_at).toLocaleString())}</small></div></article>`;
+  }).join("") : '<div class="row"><span>No state transitions recorded yet. The background server populates this timeline.</span></div>';
 }
 
 function renderProfileSettings(settings) {

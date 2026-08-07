@@ -41,6 +41,9 @@ func TestResolvePathsUsesXDGDirectories(t *testing.T) {
 	if paths.WorkflowsFile != filepath.Join("/tmp/example-state", "workbench", "workflows.json") {
 		t.Fatalf("unexpected workflow history path: %s", paths.WorkflowsFile)
 	}
+	if paths.ActivityFile != filepath.Join("/tmp/example-state", "workbench", "activity.json") {
+		t.Fatalf("unexpected activity history path: %s", paths.ActivityFile)
+	}
 	if paths.CompatibilityDir != filepath.Join("/tmp/example-state", "workbench", "compatibility") {
 		t.Fatalf("unexpected compatibility state path: %s", paths.CompatibilityDir)
 	}

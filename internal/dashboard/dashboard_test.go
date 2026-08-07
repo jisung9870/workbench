@@ -14,6 +14,7 @@ import (
 	"time"
 
 	binboxadapter "github.com/jisung9870/workbench/adapters/binbox"
+	"github.com/jisung9870/workbench/internal/activity"
 	"github.com/jisung9870/workbench/internal/output"
 	"github.com/jisung9870/workbench/internal/overview"
 	"github.com/jisung9870/workbench/internal/tasks"
@@ -32,7 +33,7 @@ func (service *fakeService) Execute(_ context.Context, request ActionRequest) (A
 }
 
 func TestHandlerServesVersionedSnapshotWithSecurityHeaders(t *testing.T) {
-	handler, err := NewHandler(&fakeService{snapshot: Snapshot{Platform: "linux", Profile: "personal", Agents: []AgentTask{{Lifecycle: "terminal"}}, Tasks: []tasks.Task{{ID: "tmux:%3", Kind: "codex", Provenance: "observed", Ownership: "unmanaged", Confidence: "inferred", StateSource: "tmux", Lifecycle: "running", ExitResult: "unknown"}}, Overview: overview.Summary{Counts: overview.Counts{ActiveObservedTasks: 1}, Attention: []overview.Attention{}, WorkLocations: []overview.WorkLocation{{TaskID: "tmux:%3", CanJump: true}}, ToolHealth: binboxadapter.Report{Provider: "binbox", Available: false, Reason: "bb executable was not found", Capabilities: []binboxadapter.Capability{}}}, Contexts: Contexts{RegistryAvailable: true, Environments: []ContextEnvironment{{ID: "dev", ExportKeys: []string{"FEATURE"}, ProjectIDs: []string{"alpha"}, SecretReferences: []ContextSecretReference{{Variable: "TOKEN", Status: "available"}}}}}}}, "secret")
+	handler, err := NewHandler(&fakeService{snapshot: Snapshot{Platform: "linux", Profile: "personal", Agents: []AgentTask{{Lifecycle: "terminal"}}, Tasks: []tasks.Task{{ID: "tmux:%3", Kind: "codex", Provenance: "observed", Ownership: "unmanaged", Confidence: "inferred", StateSource: "tmux", Lifecycle: "running", ExitResult: "unknown"}}, Overview: overview.Summary{Counts: overview.Counts{ActiveObservedTasks: 1}, Attention: []overview.Attention{}, WorkLocations: []overview.WorkLocation{{TaskID: "tmux:%3", CanJump: true}}, ToolHealth: binboxadapter.Report{Provider: "binbox", Available: false, Reason: "bb executable was not found", Capabilities: []binboxadapter.Capability{}}}, Contexts: Contexts{RegistryAvailable: true, Environments: []ContextEnvironment{{ID: "dev", ExportKeys: []string{"FEATURE"}, ProjectIDs: []string{"alpha"}, SecretReferences: []ContextSecretReference{{Variable: "TOKEN", Status: "available"}}}}}, Activity: []activity.Event{{ID: "event", Kind: "agent_state", Severity: "info", Title: "Agent codex completed", ResourceID: "agent", State: "completed", OccurredAt: time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)}}}}, "secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +70,11 @@ func TestHandlerServesVersionedSnapshotWithSecurityHeaders(t *testing.T) {
 			t.Fatalf("snapshot omitted contexts field %s: %s", field, response.Body.String())
 		}
 	}
+	for _, field := range []string{`"activity"`, `"kind":"agent_state"`, `"title":"Agent codex completed"`} {
+		if !strings.Contains(response.Body.String(), field) {
+			t.Fatalf("snapshot omitted activity field %s: %s", field, response.Body.String())
+		}
+	}
 	for _, forbidden := range []string{`"service":`, `"field":`, `sec://`} {
 		if strings.Contains(response.Body.String(), forbidden) {
 			t.Fatalf("snapshot contexts exposed reconstructable reference metadata %s: %s", forbidden, response.Body.String())
@@ -86,9 +92,9 @@ func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
 		contentType string
 		contains    []string
 	}{
-		{path: "/", contentType: "text/html", contains: []string{`id="theme-select"`, `href="/guide"`, `/assets/theme.js`, `id="overview-heading"`, `id="overview-attention"`, `id="overview-locations"`, `id="overview-tools"`, `id="tmux-sessions"`, `id="tmux-availability"`, `id="scheduler-status"`, `id="scheduler-jobs"`, `id="unregistered-tasks"`, `id="contexts-heading"`, `id="context-status"`, `id="contexts"`, `id="agent-history"`, `id="agent-registry-path"`, `id="clear-agent-history"`, `id="workflows"`, `id="workflow-history"`, `id="task-terminal-note"`, `data-task-action="jump_task"`, `data-task-action="stop_task"`}},
+		{path: "/", contentType: "text/html", contains: []string{`id="theme-select"`, `href="/guide"`, `/assets/theme.js`, `id="overview-heading"`, `id="overview-attention"`, `id="overview-locations"`, `id="overview-tools"`, `id="activity-heading"`, `id="activity-events"`, `id="tmux-sessions"`, `id="tmux-availability"`, `id="scheduler-status"`, `id="scheduler-jobs"`, `id="unregistered-tasks"`, `id="contexts-heading"`, `id="context-status"`, `id="contexts"`, `id="agent-history"`, `id="agent-registry-path"`, `id="clear-agent-history"`, `id="workflows"`, `id="workflow-history"`, `id="task-terminal-note"`, `data-task-action="jump_task"`, `data-task-action="stop_task"`}},
 		{path: "/guide", contentType: "text/html", contains: []string{`id="guide-search"`, `id="architecture"`, `id="cli-reference"`, `id="troubleshooting"`, `/assets/dashboard-overview-light.jpg`, `alt="Workbench Dashboard 화면 구성`}},
-		{path: "/assets/app.js", contentType: "text/javascript", contains: []string{`"starting", "running", "waiting", "idle"`, `task.provenance`, `renderOverview`, `renderContexts`, `renderScheduler`, `renderSecrets`, `renderProfileSettings`, `renderTools`, `update_profile`, `update_secret`, `form.elements.value.value = ""`, `registry_available`, `secret_references`, `export_keys`, `work_locations`, `tool_health`, `clear_agent_history`, `agent_registry_path`, `workflow_id`, `run_workflow`, `data-workflow-id`, `task-terminal-note`, `attach_session`, `adopt_session`, `stop_session`, `session.ownership`}},
+		{path: "/assets/app.js", contentType: "text/javascript", contains: []string{`"starting", "running", "waiting", "idle"`, `task.provenance`, `renderOverview`, `renderActivity`, `activity-events`, `renderContexts`, `renderScheduler`, `renderSecrets`, `renderProfileSettings`, `renderTools`, `update_profile`, `update_secret`, `form.elements.value.value = ""`, `registry_available`, `secret_references`, `export_keys`, `work_locations`, `tool_health`, `clear_agent_history`, `agent_registry_path`, `workflow_id`, `run_workflow`, `data-workflow-id`, `task-terminal-note`, `attach_session`, `adopt_session`, `stop_session`, `session.ownership`}},
 		{path: "/assets/theme.js", contentType: "text/javascript", contains: []string{"workbench.dashboard.theme.v1", "localStorage"}},
 		{path: "/assets/guide.js", contentType: "text/javascript", contains: []string{"guide-search", "IntersectionObserver"}},
 		{path: "/assets/dashboard-overview-light.jpg", contentType: "image/jpeg"},
