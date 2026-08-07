@@ -276,6 +276,42 @@ func TestDashboardSecretMutationRejectsMixedFields(t *testing.T) {
 	}
 }
 
+func TestDashboardUpdatesOnlyTheActiveProfile(t *testing.T) {
+	root := t.TempDir()
+	paths := dashboardContextTestPaths(root)
+	service := &dashboardService{paths: paths}
+	mutation := &dashboard.ProfileMutation{
+		DefaultBackend: "tmux", PreferCurrentTmux: false, BackendPriority: []string{"tmux", "shell"}, Editor: "nvim",
+		WindowsTerminalProfile: "Ubuntu", WindowsTerminalDistro: "Ubuntu-24.04", WindowsTerminalWindow: "last", WindowsTerminalMode: "split-vertical",
+	}
+	result, err := service.Execute(context.Background(), dashboard.ActionRequest{Action: "update_profile", Profile: mutation})
+	if err != nil || !strings.Contains(result.Message, "personal") {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	profile, err := config.LoadProfile(paths, "personal")
+	if err != nil || profile.DefaultBackend != "tmux" || profile.PreferCurrentTmux || strings.Join(profile.BackendPriority, ",") != "tmux,shell" || profile.WindowsTerminalMode != "split-vertical" {
+		t.Fatalf("profile=%#v err=%v", profile, err)
+	}
+}
+
+func TestDashboardProfileMutationRejectsMixedAndInvalidFields(t *testing.T) {
+	root := t.TempDir()
+	service := &dashboardService{paths: dashboardContextTestPaths(root)}
+	valid := &dashboard.ProfileMutation{DefaultBackend: "auto", PreferCurrentTmux: true, Editor: "nvim", WindowsTerminalWindow: "last", WindowsTerminalMode: "tab"}
+	tests := []dashboard.ActionRequest{
+		{Action: "jump_pane", PaneID: "%1", Profile: valid},
+		{Action: "update_profile", ProjectID: "alpha", Profile: valid},
+		{Action: "update_profile", Profile: &dashboard.ProfileMutation{DefaultBackend: "auto", Editor: "nvim", BackendPriority: []string{"auto"}, WindowsTerminalWindow: "last", WindowsTerminalMode: "tab"}},
+	}
+	for _, request := range tests {
+		_, err := service.Execute(context.Background(), request)
+		var actionErr *dashboard.ActionError
+		if !errors.As(err, &actionErr) || actionErr.Code != "INVALID_ACTION" {
+			t.Fatalf("invalid profile mutation accepted: request=%#v err=%v", request, err)
+		}
+	}
+}
+
 func TestDashboardAdoptsAndStopsOnlyRegisteredProjectSessions(t *testing.T) {
 	root := t.TempDir()
 	projectPath := filepath.Join(root, "alpha")
@@ -343,6 +379,9 @@ func TestDashboardSnapshotIncludesOptionalTmuxUnavailable(t *testing.T) {
 	}
 	if snapshot.Tasks == nil || len(snapshot.Tasks) != 0 {
 		t.Fatalf("tmux unavailability should produce an empty optional projection: %#v", snapshot.Tasks)
+	}
+	if !snapshot.ProfileSettings.Available || snapshot.ProfileSettings.Name != "personal" || snapshot.ProfileSettings.Values.DefaultBackend != "auto" || !snapshot.ProfileSettings.Values.PreferCurrentTmux {
+		t.Fatalf("default active profile missing: %#v", snapshot.ProfileSettings)
 	}
 }
 

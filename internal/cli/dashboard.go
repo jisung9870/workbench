@@ -191,6 +191,15 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 	} else {
 		secretCatalog.Entries = entries
 	}
+	profileSettings := dashboard.ProfileSettings{Available: false, Reason: "active profile is unavailable"}
+	if settings, settingsErr := config.LoadSettings(service.paths.ConfigFile); settingsErr == nil {
+		profileSettings.Name = settings.ActiveProfile
+		if profile, profileErr := config.LoadProfile(service.paths, settings.ActiveProfile); profileErr == nil {
+			profileSettings.Available = true
+			profileSettings.Reason = ""
+			profileSettings.Values = profile
+		}
+	}
 	sort.Strings(warnings)
 	return dashboard.Snapshot{
 		GeneratedAt: generatedAt, Platform: doctorReport.Platform, Profile: doctorReport.Profile,
@@ -198,9 +207,10 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 		Doctor: doctorReport, Warnings: warnings,
 		Tmux: tmuxSnapshot, Tasks: unifiedTasks, Overview: overviewSummary, ToolHealth: toolHealth,
 		Workflows: workflowItems, WorkflowHistory: safeWorkflowHistory,
-		Contexts:  contexts,
-		Scheduler: service.schedulerSnapshot(),
-		Secrets:   secretCatalog,
+		Contexts:        contexts,
+		Scheduler:       service.schedulerSnapshot(),
+		Secrets:         secretCatalog,
+		ProfileSettings: profileSettings,
 	}, nil
 }
 
@@ -351,7 +361,12 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 	if request.Secret != nil && request.Action != "update_secret" {
 		return dashboard.ActionResult{}, dashboardInvalid(fmt.Sprintf("%s does not accept Secret mutation fields", request.Action))
 	}
+	if request.Profile != nil && request.Action != "update_profile" {
+		return dashboard.ActionResult{}, dashboardInvalid(fmt.Sprintf("%s does not accept profile mutation fields", request.Action))
+	}
 	switch request.Action {
+	case "update_profile":
+		return service.updateProfile(request)
 	case "update_secret":
 		return service.updateSecret(request)
 	case "update_environment":
@@ -524,6 +539,35 @@ func (service *dashboardService) Execute(ctx context.Context, request dashboard.
 	default:
 		return dashboard.ActionResult{}, dashboardInvalid(fmt.Sprintf("unknown dashboard action %q", request.Action))
 	}
+}
+
+func (service *dashboardService) updateProfile(request dashboard.ActionRequest) (dashboard.ActionResult, error) {
+	mutation := request.Profile
+	if mutation == nil || request.ProjectID != "" || request.TaskID != "" || len(request.TaskIDs) != 0 || request.AgentKind != "" || request.Backend != "" || request.PaneID != "" || request.WorkflowID != "" || request.SessionName != "" {
+		return dashboard.ActionResult{}, dashboardInvalid("update_profile requires only a typed profile mutation")
+	}
+	settings, err := config.LoadSettings(service.paths.ConfigFile)
+	if err != nil {
+		return dashboard.ActionResult{}, dashboardCommandError(configError(err))
+	}
+	profile := config.Profile{
+		SchemaVersion: config.SchemaVersion, DefaultBackend: mutation.DefaultBackend,
+		PreferCurrentTmux: mutation.PreferCurrentTmux, BackendPriority: mutation.BackendPriority, Editor: mutation.Editor,
+		WindowsTerminalProfile: mutation.WindowsTerminalProfile, WindowsTerminalDistro: mutation.WindowsTerminalDistro,
+		WindowsTerminalWindow: mutation.WindowsTerminalWindow, WindowsTerminalMode: mutation.WindowsTerminalMode,
+	}
+	if err := config.ValidateProfile(profile); err != nil {
+		return dashboard.ActionResult{}, dashboardInvalid(err.Error())
+	}
+	backup, err := config.SaveProfile(service.paths, settings.ActiveProfile, profile)
+	if err != nil {
+		return dashboard.ActionResult{}, dashboardCommandError(configError(err))
+	}
+	message := fmt.Sprintf("updated active profile %s", settings.ActiveProfile)
+	if backup != "" {
+		message += "; backup created"
+	}
+	return dashboard.ActionResult{Message: message}, nil
 }
 
 func (service *dashboardService) updateEnvironment(request dashboard.ActionRequest) (dashboard.ActionResult, error) {

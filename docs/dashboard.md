@@ -55,6 +55,8 @@ reachable address is not configurable.
   and secret-reference availability status;
 - a metadata-only Secret catalog with typed store, explicit replacement, and
   remove actions;
+- the active Profile's backend, editor, tmux preference, and Windows Terminal
+  settings;
 - a live tmux session/window/pane hierarchy using stable tmux IDs and explicit
   managed, legacy, or foreign ownership;
 - scheduler availability, job status, last/next run, and expiry counts;
@@ -82,6 +84,13 @@ Binbox health is optional. The server invokes only the fixed argument array
 `bb doctor --json`, accepts its schema-v1 capability contract, and strips the
 reported executable paths. Missing, failed, or malformed providers remain
 visible as unavailable health while the snapshot itself succeeds.
+
+The Profile panel replaces the complete active schema-v1 profile through one
+typed action. Workbench validates backend names and ordering, editor text,
+tmux preference, and Windows Terminal values before creating a backup and
+atomically replacing the profile file. The Tools panel remains observational:
+it shows normalized status and recovery guidance but never executes install or
+repair commands.
 
 For the selected project, the Context panel shows its default environment ID,
 AWS profile/region, Kubernetes context/namespace metadata, ordinary export key
@@ -141,6 +150,7 @@ for narrow screens, and print styles remove the navigation chrome.
 | `adopt_session` | `project_id` | legacy session only after registered name and canonical start path verification |
 | `stop_session` | `project_id` | re-reads complete Workbench ownership before killing the exact session |
 | `update_environment` | typed `environment` mutation | metadata, export, Secret reference, or expiry operation only; no plaintext Secret field |
+| `update_profile` | complete typed `profile` mutation | active profile only; validated atomic replacement with backup |
 | `start_agent` | `project_id`, `agent_kind`, optional `backend` | detached tmux/cmux/Windows Terminal runtime |
 | `jump_agent` | `task_id` | registered active task only |
 | `stop_agent` | `task_id` | registered ownership revalidation; UI confirmation |

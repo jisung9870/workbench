@@ -151,3 +151,55 @@ func TestLoadProfileRejectsInvalidWindowsTerminalPreferences(t *testing.T) {
 		})
 	}
 }
+
+func TestSaveProfileWritesValidatedProfileAndBacksUpReplacement(t *testing.T) {
+	root := t.TempDir()
+	paths := Paths{ProfilesDir: filepath.Join(root, "profiles"), BackupsDir: filepath.Join(root, "backups")}
+	profile := DefaultProfile()
+	profile.DefaultBackend = "tmux"
+	profile.BackendPriority = []string{"tmux", "shell"}
+	profile.Editor = "nvim"
+	if backup, err := SaveProfile(paths, "personal", profile); err != nil || backup != "" {
+		t.Fatalf("first save backup=%q err=%v", backup, err)
+	}
+	loaded, err := LoadProfile(paths, "personal")
+	if err != nil || loaded.DefaultBackend != "tmux" || strings.Join(loaded.BackendPriority, ",") != "tmux,shell" {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+	profile.Editor = "vim"
+	backup, err := SaveProfile(paths, "personal", profile)
+	if err != nil || backup == "" {
+		t.Fatalf("replacement backup=%q err=%v", backup, err)
+	}
+	if _, err := os.Stat(backup); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSaveProfileRejectsUnsafeValuesWithoutWriting(t *testing.T) {
+	root := t.TempDir()
+	paths := Paths{ProfilesDir: filepath.Join(root, "profiles"), BackupsDir: filepath.Join(root, "backups")}
+	profile := DefaultProfile()
+	profile.Editor = "nvim\nmalicious"
+	if _, err := SaveProfile(paths, "personal", profile); err == nil {
+		t.Fatal("unsafe editor was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(paths.ProfilesDir, "personal.toml")); !os.IsNotExist(err) {
+		t.Fatalf("invalid profile was written: %v", err)
+	}
+}
+
+func TestValidateRejectsUnsafeProfileText(t *testing.T) {
+	root := t.TempDir()
+	paths := Paths{ConfigFile: filepath.Join(root, "config.toml"), ProfilesDir: filepath.Join(root, "profiles")}
+	if err := os.MkdirAll(paths.ProfilesDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contents := "schema_version = 1\neditor = \"nvim\\nmalicious\"\n"
+	if err := os.WriteFile(filepath.Join(paths.ProfilesDir, "personal.toml"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(paths); err == nil || !strings.Contains(err.Error(), "control characters") {
+		t.Fatalf("unsafe profile passed config validation: %v", err)
+	}
+}

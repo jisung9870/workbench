@@ -118,6 +118,12 @@ Profile files support `schema_version`, `default_backend`,
 Unknown TOML fields, unsupported schema versions, and parser errors fail
 `wb config validate` instead of being silently ignored.
 
+The Dashboard Profile panel can update the complete active profile. Every
+update is validated, backed up when a profile file already exists, and written
+atomically. Dashboard Tool management is intentionally observational: typed
+`bb doctor --json` status and recovery guidance are shown, but install and
+repair commands are never executed from the browser.
+
 Environments may include an optional RFC3339 `expires_at`. Workbench derives
 `permanent`, `active`, `expiring`, or `expired` state and blocks export and
 workflow injection after expiry without deleting metadata or Secrets. The

@@ -22,6 +22,7 @@ import (
 	tmuxadapter "github.com/jisung9870/workbench/adapters/tmux"
 	"github.com/jisung9870/workbench/internal/agents"
 	"github.com/jisung9870/workbench/internal/backend"
+	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/doctor"
 	"github.com/jisung9870/workbench/internal/environments"
 	"github.com/jisung9870/workbench/internal/output"
@@ -106,6 +107,13 @@ type SecretCatalog struct {
 	Entries   []secrets.Entry `json:"entries"`
 }
 
+type ProfileSettings struct {
+	Available bool           `json:"available"`
+	Reason    string         `json:"reason,omitempty"`
+	Name      string         `json:"name,omitempty"`
+	Values    config.Profile `json:"values"`
+}
+
 func SafeWorkflowRun(result workflows.Result) WorkflowRun {
 	return WorkflowRun{ID: result.ID, WorkflowID: result.WorkflowID, ProjectID: result.ProjectID, Status: result.Status, ExitCode: result.ExitCode, StartedAt: result.StartedAt, FinishedAt: result.FinishedAt, DurationMillis: result.DurationMillis, OutputTruncated: result.OutputTruncated, PaneID: result.PaneID, SessionName: result.SessionName, EnvironmentID: result.EnvironmentID, ResolveSecrets: result.ResolveSecrets}
 }
@@ -130,6 +138,7 @@ type Snapshot struct {
 	Contexts          Contexts                 `json:"contexts"`
 	Scheduler         scheduler.Snapshot       `json:"scheduler"`
 	Secrets           SecretCatalog            `json:"secrets"`
+	ProfileSettings   ProfileSettings          `json:"profile_settings"`
 }
 
 type ActionRequest struct {
@@ -144,6 +153,7 @@ type ActionRequest struct {
 	SessionName string               `json:"session_name,omitempty"`
 	Environment *EnvironmentMutation `json:"environment,omitempty"`
 	Secret      *SecretMutation      `json:"secret,omitempty"`
+	Profile     *ProfileMutation     `json:"profile,omitempty"`
 }
 
 type EnvironmentMutation struct {
@@ -165,6 +175,17 @@ type SecretMutation struct {
 	Field     string `json:"field"`
 	Value     string `json:"value,omitempty"`
 	Replace   bool   `json:"replace,omitempty"`
+}
+
+type ProfileMutation struct {
+	DefaultBackend         string   `json:"default_backend"`
+	PreferCurrentTmux      bool     `json:"prefer_current_tmux"`
+	BackendPriority        []string `json:"backend_priority"`
+	Editor                 string   `json:"editor"`
+	WindowsTerminalProfile string   `json:"windows_terminal_profile"`
+	WindowsTerminalDistro  string   `json:"windows_terminal_distro"`
+	WindowsTerminalWindow  string   `json:"windows_terminal_window"`
+	WindowsTerminalMode    string   `json:"windows_terminal_mode"`
 }
 
 type ActionResult struct {

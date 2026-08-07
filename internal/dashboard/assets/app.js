@@ -86,6 +86,8 @@ function render() {
 
   renderTmux(data.tmux || { available: false, reason: "tmux observation unavailable", sessions: [] });
   renderScheduler(data.scheduler || { available: false, running: false, reason: "scheduler unavailable", jobs: [] });
+  renderProfileSettings(data.profile_settings || { available: false, reason: "Profile unavailable" });
+  renderTools(data.tool_health || { available: false, reason: "Tool health unavailable", capabilities: [] });
   renderSecrets(data.secrets || { available: false, reason: "Secret store unavailable", entries: [] });
   renderUnregisteredTasks(tasks);
   renderOverview(data.overview || { counts: {}, attention: [], work_locations: [], tool_health: data.tool_health || { available: false, capabilities: [], summary: {} } });
@@ -151,6 +153,48 @@ function render() {
   });
   $("workflow-history").innerHTML = workflowHistory.length ? workflowHistory.slice(0, 8).map(run => `<div class="row"><strong>${esc(run.workflow_id)}</strong><span class="status ${esc(run.status)}">${esc(run.status)}</span><small>${esc(new Date(run.finished_at).toLocaleString())}${run.output_truncated ? " · output capped" : ""}</small></div>`).join("") : '<div class="row"><span>No workflow runs recorded</span></div>';
   renderTask();
+}
+
+function renderProfileSettings(settings) {
+  const status = $("profile-settings-status");
+  const target = $("profile-settings");
+  if (!settings?.available) {
+    status.textContent = "unavailable";
+    status.className = "status unavailable";
+    target.innerHTML = `<div class="context-state error"><strong>Profile unavailable</strong><p>${esc(settings?.reason || "The active profile could not be loaded.")}</p></div>`;
+    return;
+  }
+  const profile = settings.values || {};
+  status.textContent = settings.name;
+  status.className = "status available";
+  target.innerHTML = `<form id="profile-settings-form" class="context-editor profile-editor"><label>Default backend<select name="default_backend"><option value="auto">auto</option><option value="cmux">cmux</option><option value="tmux">tmux</option><option value="shell">shell</option><option value="windows-terminal">windows-terminal</option></select></label><label>Backend priority<input name="backend_priority" value="${esc((profile.backend_priority || []).join(", "))}" placeholder="cmux, tmux, shell"></label><label>Editor<input name="editor" value="${esc(profile.editor || "nvim")}" required></label><label class="profile-checkbox"><input name="prefer_current_tmux" type="checkbox" ${profile.prefer_current_tmux ? "checked" : ""}> Prefer current tmux client</label><label>Windows Terminal profile<input name="windows_terminal_profile" value="${esc(profile.windows_terminal_profile || "")}"></label><label>WSL distro<input name="windows_terminal_distro" value="${esc(profile.windows_terminal_distro || "")}"></label><label>Window<input name="windows_terminal_window" value="${esc(profile.windows_terminal_window || "last")}" list="windows-terminal-window-values" required><datalist id="windows-terminal-window-values"><option value="last"><option value="new"></datalist></label><label>Mode<select name="windows_terminal_mode"><option value="tab">tab</option><option value="split-auto">split-auto</option><option value="split-horizontal">split-horizontal</option><option value="split-vertical">split-vertical</option></select></label><button type="submit" class="primary">Save profile</button></form>`;
+  const form = $("profile-settings-form");
+  form.elements.default_backend.value = profile.default_backend || "auto";
+  form.elements.windows_terminal_mode.value = profile.windows_terminal_mode || "tab";
+  form.onsubmit = event => {
+    event.preventDefault();
+    const values = new FormData(form);
+    const priorities = String(values.get("backend_priority") || "").split(",").map(value => value.trim()).filter(Boolean);
+    action({ action: "update_profile", profile: {
+      default_backend: values.get("default_backend"), prefer_current_tmux: values.get("prefer_current_tmux") === "on",
+      backend_priority: priorities, editor: values.get("editor"), windows_terminal_profile: values.get("windows_terminal_profile"),
+      windows_terminal_distro: values.get("windows_terminal_distro"), windows_terminal_window: values.get("windows_terminal_window"),
+      windows_terminal_mode: values.get("windows_terminal_mode"),
+    } });
+  };
+}
+
+function renderTools(tools) {
+  const status = $("tools-status");
+  const target = $("tool-catalog");
+  const capabilities = Array.isArray(tools?.capabilities) ? tools.capabilities : [];
+  status.textContent = tools?.available ? `${tools.summary?.available || 0} ready` : "unavailable";
+  status.className = `status ${tools?.available ? "available" : "unavailable"}`;
+  if (!tools?.available) {
+    target.innerHTML = `<div class="context-state error"><strong>Tool health unavailable</strong><p>${esc(tools?.reason || "bb doctor could not be read.")}</p></div>`;
+    return;
+  }
+  target.innerHTML = capabilities.length ? capabilities.map(tool => `<div class="row tool-row"><strong>${esc(tool.name)}</strong><span class="status ${esc(tool.status)}">${esc(tool.status)}</span><small>${esc(tool.status === "available" ? tool.description : tool.recovery || tool.reason)}</small></div>`).join("") : '<div class="row"><span>No tool capabilities reported</span></div>';
 }
 
 function renderSecrets(catalog) {

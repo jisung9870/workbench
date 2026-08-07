@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/jisung9870/workbench/internal/storage"
 )
 
 const SchemaVersion = 1
@@ -19,15 +21,15 @@ type Settings struct {
 }
 
 type Profile struct {
-	SchemaVersion          int      `toml:"schema_version"`
-	DefaultBackend         string   `toml:"default_backend"`
-	PreferCurrentTmux      bool     `toml:"prefer_current_tmux"`
-	BackendPriority        []string `toml:"backend_priority"`
-	Editor                 string   `toml:"editor"`
-	WindowsTerminalProfile string   `toml:"windows_terminal_profile"`
-	WindowsTerminalDistro  string   `toml:"windows_terminal_distro"`
-	WindowsTerminalWindow  string   `toml:"windows_terminal_window"`
-	WindowsTerminalMode    string   `toml:"windows_terminal_mode"`
+	SchemaVersion          int      `toml:"schema_version" json:"schema_version"`
+	DefaultBackend         string   `toml:"default_backend" json:"default_backend"`
+	PreferCurrentTmux      bool     `toml:"prefer_current_tmux" json:"prefer_current_tmux"`
+	BackendPriority        []string `toml:"backend_priority" json:"backend_priority"`
+	Editor                 string   `toml:"editor" json:"editor"`
+	WindowsTerminalProfile string   `toml:"windows_terminal_profile" json:"windows_terminal_profile"`
+	WindowsTerminalDistro  string   `toml:"windows_terminal_distro" json:"windows_terminal_distro"`
+	WindowsTerminalWindow  string   `toml:"windows_terminal_window" json:"windows_terminal_window"`
+	WindowsTerminalMode    string   `toml:"windows_terminal_mode" json:"windows_terminal_mode"`
 }
 
 func DefaultSettings() Settings {
@@ -95,22 +97,73 @@ func LoadProfile(paths Paths, name string) (Profile, error) {
 	if profile.WindowsTerminalMode == "" {
 		profile.WindowsTerminalMode = "tab"
 	}
-	if !ValidBackend(profile.DefaultBackend) {
-		return Profile{}, fmt.Errorf("%s: invalid default_backend %q", path, profile.DefaultBackend)
-	}
-	if err := ValidateBackendPriority(profile.BackendPriority); err != nil {
+	if err := ValidateProfile(profile); err != nil {
 		return Profile{}, fmt.Errorf("%s: %w", path, err)
 	}
+	return profile, nil
+}
+
+func SaveProfile(paths Paths, name string, profile Profile) (string, error) {
+	if !ValidProfileName(name) {
+		return "", fmt.Errorf("invalid profile name %q", name)
+	}
+	profile.SchemaVersion = SchemaVersion
+	if err := ValidateProfile(profile); err != nil {
+		return "", err
+	}
+	var encoded bytes.Buffer
+	if err := toml.NewEncoder(&encoded).Encode(profile); err != nil {
+		return "", fmt.Errorf("encode profile %q: %w", name, err)
+	}
+	path := filepath.Join(paths.ProfilesDir, name+".toml")
+	backup, err := storage.Backup(path, paths.BackupsDir, "profile-"+name+".toml")
+	if err != nil {
+		return "", err
+	}
+	if err := storage.WriteAtomic(path, encoded.Bytes()); err != nil {
+		return backup, err
+	}
+	if _, err := LoadProfile(paths, name); err != nil {
+		return backup, fmt.Errorf("validate written profile %q: %w", name, err)
+	}
+	return backup, nil
+}
+
+func ValidateProfile(profile Profile) error {
+	if profile.SchemaVersion != SchemaVersion {
+		return fmt.Errorf("unsupported schema_version %d (expected %d)", profile.SchemaVersion, SchemaVersion)
+	}
+	if !ValidBackend(profile.DefaultBackend) {
+		return fmt.Errorf("invalid default_backend %q", profile.DefaultBackend)
+	}
+	if err := ValidateBackendPriority(profile.BackendPriority); err != nil {
+		return err
+	}
+	if profile.Editor == "" || hasControl(profile.Editor) {
+		return errors.New("editor must not be empty or contain control characters")
+	}
+	if hasControl(profile.WindowsTerminalProfile) {
+		return errors.New("windows_terminal_profile contains control characters")
+	}
 	if !ValidWindowsTerminalWindow(profile.WindowsTerminalWindow) {
-		return Profile{}, fmt.Errorf("%s: invalid windows_terminal_window %q", path, profile.WindowsTerminalWindow)
+		return fmt.Errorf("invalid windows_terminal_window %q", profile.WindowsTerminalWindow)
 	}
 	if !ValidWindowsTerminalMode(profile.WindowsTerminalMode) {
-		return Profile{}, fmt.Errorf("%s: invalid windows_terminal_mode %q", path, profile.WindowsTerminalMode)
+		return fmt.Errorf("invalid windows_terminal_mode %q", profile.WindowsTerminalMode)
 	}
 	if !ValidWindowsTerminalDistro(profile.WindowsTerminalDistro) {
-		return Profile{}, fmt.Errorf("%s: invalid windows_terminal_distro %q", path, profile.WindowsTerminalDistro)
+		return fmt.Errorf("invalid windows_terminal_distro %q", profile.WindowsTerminalDistro)
 	}
-	return profile, nil
+	return nil
+}
+
+func hasControl(value string) bool {
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func ValidProfileName(name string) bool {
@@ -189,6 +242,10 @@ func Validate(paths Paths) error {
 		}
 		if !ValidWindowsTerminalDistro(profile.WindowsTerminalDistro) {
 			return fmt.Errorf("%s: invalid windows_terminal_distro %q", path, profile.WindowsTerminalDistro)
+		}
+		name := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		if _, err := LoadProfile(paths, name); err != nil {
+			return err
 		}
 	}
 	return nil

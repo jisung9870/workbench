@@ -53,6 +53,17 @@
           <section class="panel overview-panel"><div class="panel-heading"><div><span class="eyebrow">bb doctor</span><h3>Tool health</h3></div></div><div id="overview-tools" class="rows"></div></section>
         </div>
       </section>
+      <div class="control-grid">
+        <section class="panel profile-panel" aria-labelledby="profile-settings-heading">
+          <div class="panel-heading"><div><span class="eyebrow">Active configuration</span><h2 id="profile-settings-heading">Profile</h2></div><span id="profile-settings-status" class="status">checking</span></div>
+          <div id="profile-settings" aria-live="polite"></div>
+        </section>
+        <section class="panel tools-panel" aria-labelledby="tools-heading">
+          <div class="panel-heading"><div><span class="eyebrow">Managed capabilities</span><h2 id="tools-heading">Tools</h2></div><span id="tools-status" class="status">checking</span></div>
+          <p class="workflow-note">Tool state comes from the typed <code>bb doctor --json</code> contract. Recovery guidance is informational and never runs commands.</p>
+          <div id="tool-catalog" class="rows"></div>
+        </section>
+      </div>
       <section class="panel secrets-panel" aria-labelledby="secrets-heading">
         <div class="panel-heading"><div><span class="eyebrow">Encrypted local store</span><h2 id="secrets-heading">Secrets</h2></div><span id="secret-status" class="status">checking</span></div>
         <p class="workflow-note">Only service and field names are displayed. Secret values are accepted for writes and are never returned by the Dashboard API.</p>
