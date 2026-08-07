@@ -111,6 +111,8 @@ function render() {
   const workflows = (data.workflows || []).filter(item => item.project_id === project.id);
   const workflowHistory = (data.workflow_history || []).filter(item => item.project_id === project.id);
 
+  renderContexts(data.contexts || { registry_available: false, reason: "Context registry unavailable", environments: [] }, project);
+
   $("metric-agents").textContent = activeTasks.length;
   $("active-agent-count").textContent = activeTasks.length;
   $("metric-worktrees").textContent = worktrees.length;
@@ -140,6 +142,45 @@ function render() {
   });
   $("workflow-history").innerHTML = workflowHistory.length ? workflowHistory.slice(0, 8).map(run => `<div class="row"><strong>${esc(run.workflow_id)}</strong><span class="status ${esc(run.status)}">${esc(run.status)}</span><small>${esc(new Date(run.finished_at).toLocaleString())}${run.output_truncated ? " · output capped" : ""}</small></div>`).join("") : '<div class="row"><span>No workflow runs recorded</span></div>';
   renderTask();
+}
+
+function renderContexts(contexts, project) {
+  const status = $("context-status");
+  const target = $("contexts");
+  const environments = Array.isArray(contexts?.environments) ? contexts.environments : [];
+  if (!contexts?.registry_available) {
+    status.textContent = "unavailable";
+    status.className = "status unavailable";
+    target.innerHTML = `<div class="context-state error"><strong>Context registry unavailable</strong><p>${esc(contexts?.reason || "Environment metadata could not be loaded.")}</p></div>`;
+    return;
+  }
+  const linkedID = project.environment_id || "";
+  const environment = environments.find(item => item.id === linkedID) || environments.find(item => (item.project_ids || []).includes(project.id));
+  if (!linkedID && !environment) {
+    status.textContent = "not linked";
+    status.className = "status skipped";
+    target.innerHTML = '<div class="context-state"><strong>No default environment</strong><p>This project runs without a Workbench environment unless the CLI explicitly selects one.</p></div>';
+    return;
+  }
+  if (!environment) {
+    status.textContent = "missing";
+    status.className = "status warning";
+    target.innerHTML = `<div class="context-state error"><strong>Linked environment is missing</strong><p>The project references ${esc(linkedID)}, but the registry has no matching environment.</p></div>`;
+    return;
+  }
+  const exportKeys = environment.export_keys || [];
+  const secretReferences = environment.secret_references || [];
+  const missingSecrets = secretReferences.filter(item => item.status !== "available");
+  status.textContent = missingSecrets.length ? "review" : "available";
+  status.className = `status ${missingSecrets.length ? "warning" : "available"}`;
+  const metadata = [
+    ["Environment", environment.id],
+    ["AWS profile", environment.aws_profile || "Not set"],
+    ["AWS region", environment.aws_region || "Not set"],
+    ["Kubernetes context", environment.kube_context || "Not set"],
+    ["Kubernetes namespace", environment.kube_namespace || "Not set"],
+  ];
+  target.innerHTML = `<dl class="context-metadata">${metadata.map(([label, value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join("")}</dl><div class="context-group"><strong>Export keys</strong>${exportKeys.length ? `<div class="context-tags">${exportKeys.map(key => `<code>${esc(key)}</code>`).join("")}</div>` : '<p>No ordinary export keys</p>'}</div><div class="context-group"><strong>Secret references</strong>${secretReferences.length ? `<div class="context-secret-list">${secretReferences.map(item => `<div><code>${esc(item.variable)}</code><span class="status ${esc(item.status)}">${esc(item.status)}</span></div>`).join("")}</div>` : '<p>No secret references</p>'}</div>`;
 }
 
 function renderOverview(overview) {

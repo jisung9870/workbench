@@ -26,8 +26,10 @@ import (
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/dashboard"
 	"github.com/jisung9870/workbench/internal/doctor"
+	"github.com/jisung9870/workbench/internal/environments"
 	"github.com/jisung9870/workbench/internal/overview"
 	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/secrets"
 	"github.com/jisung9870/workbench/internal/tasks"
 	"github.com/jisung9870/workbench/internal/workflows"
 	"github.com/jisung9870/workbench/internal/worktrees"
@@ -121,6 +123,8 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 	if err != nil {
 		return dashboard.Snapshot{}, err
 	}
+	contexts, contextWarnings := buildDashboardContexts(service.paths, projectItems)
+	warnings = append(warnings, contextWarnings...)
 	dashboardAgents := make([]dashboard.AgentTask, 0, len(agentItems))
 	for _, task := range agentItems {
 		lifecycle := "terminal"
@@ -148,7 +152,6 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 		}
 		changes = append(changes, projectChanges(ctx, executor, project))
 	}
-	sort.Strings(warnings)
 	overviewSummary := overview.Build(overview.Input{
 		Projects: projectItems, Tasks: unifiedTasks, Tmux: tmuxSnapshot, Worktrees: worktreeItems,
 		Changes: changes, Doctor: doctorReport, Tools: toolHealth,
@@ -166,13 +169,108 @@ func (service *dashboardService) Snapshot(ctx context.Context) (dashboard.Snapsh
 	for _, item := range workflowHistory {
 		safeWorkflowHistory = append(safeWorkflowHistory, dashboard.SafeWorkflowRun(item))
 	}
+	sort.Strings(warnings)
 	return dashboard.Snapshot{
 		GeneratedAt: generatedAt, Platform: doctorReport.Platform, Profile: doctorReport.Profile,
 		AgentRegistryPath: service.paths.AgentsFile, Projects: projectItems, Agents: dashboardAgents, Worktrees: worktreeItems, Changes: changes,
 		Doctor: doctorReport, Warnings: warnings,
 		Tmux: tmuxSnapshot, Tasks: unifiedTasks, Overview: overviewSummary, ToolHealth: toolHealth,
 		Workflows: workflowItems, WorkflowHistory: safeWorkflowHistory,
+		Contexts: contexts,
 	}, nil
+}
+
+func buildDashboardContexts(paths config.Paths, projectItems []projects.Project) (dashboard.Contexts, []string) {
+	result := dashboard.Contexts{RegistryAvailable: true, Environments: []dashboard.ContextEnvironment{}}
+	items, err := environments.NewStore(paths).List()
+	if err != nil {
+		result.RegistryAvailable = false
+		result.Reason = "environment registry unavailable"
+		return result, []string{"contexts: environment registry unavailable"}
+	}
+	return projectDashboardContexts(items, projectItems, secrets.NewStore(paths)), nil
+}
+
+type dashboardSecretLister interface {
+	List(service string) ([]secrets.Entry, error)
+}
+
+func projectDashboardContexts(items []environments.Environment, projectItems []projects.Project, secretLister dashboardSecretLister) dashboard.Contexts {
+	result := dashboard.Contexts{RegistryAvailable: true, Environments: []dashboard.ContextEnvironment{}}
+	projectIDs := map[string][]string{}
+	for _, project := range projectItems {
+		if project.EnvironmentID != "" {
+			projectIDs[project.EnvironmentID] = append(projectIDs[project.EnvironmentID], project.ID)
+			result.Summary.LinkedProjects++
+		}
+	}
+	for environmentID := range projectIDs {
+		sort.Strings(projectIDs[environmentID])
+	}
+	entries, listErr := secretLister.List("")
+	availableSecrets := make(map[environments.SecretReference]struct{}, len(entries))
+	if listErr == nil {
+		for _, entry := range entries {
+			if entry.Field != "" {
+				availableSecrets[environments.SecretReference{Service: entry.Service, Field: entry.Field}] = struct{}{}
+			}
+		}
+	}
+	for _, item := range items {
+		exportKeys := make([]string, 0, len(item.Exports))
+		for key := range item.Exports {
+			exportKeys = append(exportKeys, key)
+		}
+		sort.Strings(exportKeys)
+		projectLinks := append([]string(nil), projectIDs[item.ID]...)
+		references := make([]dashboard.ContextSecretReference, 0, len(item.Secrets))
+		variables := make([]string, 0, len(item.Secrets))
+		for variable := range item.Secrets {
+			variables = append(variables, variable)
+		}
+		sort.Strings(variables)
+		for _, variable := range variables {
+			projected := projectDashboardSecretReference(variable, item.Secrets[variable], availableSecrets, listErr)
+			references = append(references, projected)
+			switch projected.Status {
+			case "available":
+				result.Summary.Available++
+			case "missing":
+				result.Summary.Missing++
+			case "store_unavailable":
+				result.Summary.StoreUnavailable++
+			default:
+				result.Summary.InvalidReferences++
+			}
+		}
+		result.Environments = append(result.Environments, dashboard.ContextEnvironment{
+			ID: item.ID, AWSProfile: item.AWSProfile, AWSRegion: item.AWSRegion,
+			KubeContext: item.KubeContext, KubeNamespace: item.KubeNamespace,
+			ExportKeys: exportKeys, ProjectIDs: projectLinks, SecretReferences: references,
+		})
+		result.Summary.SecretReferences += len(references)
+	}
+	sort.Slice(result.Environments, func(i, j int) bool { return result.Environments[i].ID < result.Environments[j].ID })
+	result.Summary.Environments = len(result.Environments)
+	return result
+}
+
+func projectDashboardSecretReference(variable, referenceValue string, available map[environments.SecretReference]struct{}, storeErr error) dashboard.ContextSecretReference {
+	projected := dashboard.ContextSecretReference{Variable: variable, Status: "invalid_reference"}
+	reference, err := environments.ParseSecretReference(referenceValue)
+	if err != nil {
+		return projected
+	}
+	if storeErr != nil {
+		projected.Status = "store_unavailable"
+		return projected
+	}
+	if _, found := available[reference]; found {
+		projected.Status = "available"
+	} else {
+		projected.Status = "missing"
+	}
+	return projected
 }
 
 func (service *dashboardService) workflowManager() workflowRuntime {

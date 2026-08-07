@@ -32,7 +32,7 @@ func (service *fakeService) Execute(_ context.Context, request ActionRequest) (A
 }
 
 func TestHandlerServesVersionedSnapshotWithSecurityHeaders(t *testing.T) {
-	handler, err := NewHandler(&fakeService{snapshot: Snapshot{Platform: "linux", Profile: "personal", Agents: []AgentTask{{Lifecycle: "terminal"}}, Tasks: []tasks.Task{{ID: "tmux:%3", Kind: "codex", Provenance: "observed", Ownership: "unmanaged", Confidence: "inferred", StateSource: "tmux", Lifecycle: "running", ExitResult: "unknown"}}, Overview: overview.Summary{Counts: overview.Counts{ActiveObservedTasks: 1}, Attention: []overview.Attention{}, WorkLocations: []overview.WorkLocation{{TaskID: "tmux:%3", CanJump: true}}, ToolHealth: binboxadapter.Report{Provider: "binbox", Available: false, Reason: "bb executable was not found", Capabilities: []binboxadapter.Capability{}}}}}, "secret")
+	handler, err := NewHandler(&fakeService{snapshot: Snapshot{Platform: "linux", Profile: "personal", Agents: []AgentTask{{Lifecycle: "terminal"}}, Tasks: []tasks.Task{{ID: "tmux:%3", Kind: "codex", Provenance: "observed", Ownership: "unmanaged", Confidence: "inferred", StateSource: "tmux", Lifecycle: "running", ExitResult: "unknown"}}, Overview: overview.Summary{Counts: overview.Counts{ActiveObservedTasks: 1}, Attention: []overview.Attention{}, WorkLocations: []overview.WorkLocation{{TaskID: "tmux:%3", CanJump: true}}, ToolHealth: binboxadapter.Report{Provider: "binbox", Available: false, Reason: "bb executable was not found", Capabilities: []binboxadapter.Capability{}}}, Contexts: Contexts{RegistryAvailable: true, Environments: []ContextEnvironment{{ID: "dev", ExportKeys: []string{"FEATURE"}, ProjectIDs: []string{"alpha"}, SecretReferences: []ContextSecretReference{{Variable: "TOKEN", Status: "available"}}}}}}}, "secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +64,16 @@ func TestHandlerServesVersionedSnapshotWithSecurityHeaders(t *testing.T) {
 			t.Fatalf("snapshot omitted overview field %s: %s", field, response.Body.String())
 		}
 	}
+	for _, field := range []string{`"contexts"`, `"registry_available":true`, `"export_keys":["FEATURE"]`, `"variable":"TOKEN"`, `"status":"available"`} {
+		if !strings.Contains(response.Body.String(), field) {
+			t.Fatalf("snapshot omitted contexts field %s: %s", field, response.Body.String())
+		}
+	}
+	for _, forbidden := range []string{`"service":`, `"field":`, `sec://`} {
+		if strings.Contains(response.Body.String(), forbidden) {
+			t.Fatalf("snapshot contexts exposed reconstructable reference metadata %s: %s", forbidden, response.Body.String())
+		}
+	}
 }
 
 func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
@@ -76,9 +86,9 @@ func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
 		contentType string
 		contains    []string
 	}{
-		{path: "/", contentType: "text/html", contains: []string{`id="theme-select"`, `href="/guide"`, `/assets/theme.js`, `id="overview-heading"`, `id="overview-attention"`, `id="overview-locations"`, `id="overview-tools"`, `id="tmux-sessions"`, `id="tmux-availability"`, `id="unregistered-tasks"`, `id="agent-history"`, `id="agent-registry-path"`, `id="clear-agent-history"`, `id="workflows"`, `id="workflow-history"`, `id="task-terminal-note"`, `data-task-action="jump_task"`, `data-task-action="stop_task"`}},
+		{path: "/", contentType: "text/html", contains: []string{`id="theme-select"`, `href="/guide"`, `/assets/theme.js`, `id="overview-heading"`, `id="overview-attention"`, `id="overview-locations"`, `id="overview-tools"`, `id="tmux-sessions"`, `id="tmux-availability"`, `id="unregistered-tasks"`, `id="contexts-heading"`, `id="context-status"`, `id="contexts"`, `id="agent-history"`, `id="agent-registry-path"`, `id="clear-agent-history"`, `id="workflows"`, `id="workflow-history"`, `id="task-terminal-note"`, `data-task-action="jump_task"`, `data-task-action="stop_task"`}},
 		{path: "/guide", contentType: "text/html", contains: []string{`id="guide-search"`, `id="architecture"`, `id="cli-reference"`, `id="troubleshooting"`, `/assets/dashboard-overview-light.jpg`, `alt="Workbench Dashboard 화면 구성`}},
-		{path: "/assets/app.js", contentType: "text/javascript", contains: []string{`"starting", "running", "waiting", "idle"`, `task.provenance`, `renderOverview`, `work_locations`, `tool_health`, `clear_agent_history`, `agent_registry_path`, `workflow_id`, `run_workflow`, `data-workflow-id`, `task-terminal-note`}},
+		{path: "/assets/app.js", contentType: "text/javascript", contains: []string{`"starting", "running", "waiting", "idle"`, `task.provenance`, `renderOverview`, `renderContexts`, `registry_available`, `secret_references`, `export_keys`, `work_locations`, `tool_health`, `clear_agent_history`, `agent_registry_path`, `workflow_id`, `run_workflow`, `data-workflow-id`, `task-terminal-note`}},
 		{path: "/assets/theme.js", contentType: "text/javascript", contains: []string{"workbench.dashboard.theme.v1", "localStorage"}},
 		{path: "/assets/guide.js", contentType: "text/javascript", contains: []string{"guide-search", "IntersectionObserver"}},
 		{path: "/assets/dashboard-overview-light.jpg", contentType: "image/jpeg"},
@@ -128,7 +138,7 @@ func TestDashboardJavaScriptBehavior(t *testing.T) {
 	if err != nil {
 		t.Skip("node is unavailable")
 	}
-	command := exec.Command(node, "--test", "testdata/theme_test.mjs", "testdata/guide_test.mjs")
+	command := exec.Command(node, "--test", "testdata/theme_test.mjs", "testdata/guide_test.mjs", "testdata/contexts_test.mjs")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("dashboard JavaScript tests failed: %v\n%s", err, output)
 	}

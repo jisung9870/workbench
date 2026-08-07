@@ -430,6 +430,11 @@ start/jump/stop, and allowlisted workflow actions. Cross-origin requests and act
 requests without the per-process token are rejected; no arbitrary shell command
 field is exposed.
 
+The selected-project Context panel is read-only. It shows the linked environment
+and AWS/Kubernetes metadata, ordinary export key names, and normalized secret
+reference health only; values, raw references, local secret paths, and Context
+mutation controls are not exposed.
+
 Use the **Theme** control to follow the operating-system appearance or select
 Light or Dark explicitly. The preference is stored only in browser localStorage.
 The same loopback server exposes an offline, searchable product guide at

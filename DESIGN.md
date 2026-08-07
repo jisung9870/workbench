@@ -3,10 +3,10 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-08-05
+- Last refreshed: 2026-08-07
 - Primary product surfaces: loopback Dashboard (`/`) and embedded documentation site (`/guide`)
-- Evidence reviewed: `README.md`, `docs/*.md`, `internal/dashboard/assets/*`,
-  `internal/dashboard/dashboard.go`, `internal/dashboard/dashboard_test.go`, and the parent architecture plans in
+- Evidence reviewed: `README.md`, `docs/*.md`, `internal/dashboard/assets/*`, the schema-v1 Dashboard `contexts`
+  snapshot contract, `internal/dashboard/dashboard.go`, `internal/dashboard/dashboard_test.go`, and the parent architecture plans in
   `../plan/`
 
 ## Brand
@@ -18,7 +18,7 @@
 
 ## Product goals
 
-- Goals: make local projects, Agent tasks, worktrees, Git state, and capability health understandable at a glance;
+- Goals: make local projects, their selected runtime context, Agent tasks, worktrees, Git state, and capability health understandable at a glance;
   make the system learnable without reading source code; support dark, light, and system themes
 - Non-goals: replace the CLI, become a daemon, expose Workbench remotely, or add arbitrary browser-side commands
 - Success signals: a new operator can install, open a project, start an Agent, interpret Doctor, and recover from a
@@ -67,9 +67,11 @@
   cards, status pills, notices, and typed action buttons
 - New/changed components: theme switch, product navigation, guide sidebar, search, section cards, callouts, command
   blocks, architecture flow, product screenshot figure/caption, feature matrix, page table of contents, and a
-  collapsed Agent history disclosure with registry provenance and an explicitly confirmed clear action
+  collapsed Agent history disclosure with registry provenance, an explicitly confirmed clear action, and a read-only
+  selected-project Context panel showing only AWS/Kubernetes metadata, export key names, and secret-reference status
 - Variants and states: dark/light/system theme; active/hover/focus/disabled controls; info/warning/danger callouts;
-  available/unavailable/skipped health states
+  available/unavailable/skipped health states; Context registry unavailable, project unlinked, linked environment
+  missing, and secret-reference review states
 - Token/component ownership: `internal/dashboard/assets/style.css` owns shared CSS variables and components;
   `theme.js` owns the device-local theme preference
 

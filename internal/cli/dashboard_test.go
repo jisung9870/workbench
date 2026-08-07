@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -16,7 +18,9 @@ import (
 	"github.com/jisung9870/workbench/internal/backend"
 	"github.com/jisung9870/workbench/internal/config"
 	"github.com/jisung9870/workbench/internal/dashboard"
+	"github.com/jisung9870/workbench/internal/environments"
 	"github.com/jisung9870/workbench/internal/projects"
+	"github.com/jisung9870/workbench/internal/secrets"
 	"github.com/jisung9870/workbench/internal/workflows"
 )
 
@@ -46,6 +50,19 @@ type fakeTmuxRuntime struct {
 	snapshot tmuxadapter.Snapshot
 	jumped   string
 	jumpErr  error
+}
+
+type countingSecretLister struct {
+	calls   int
+	service string
+	entries []secrets.Entry
+	err     error
+}
+
+func (lister *countingSecretLister) List(service string) ([]secrets.Entry, error) {
+	lister.calls++
+	lister.service = service
+	return lister.entries, lister.err
 }
 
 func (runtime *fakeTmuxRuntime) Snapshot(context.Context) tmuxadapter.Snapshot {
@@ -181,6 +198,166 @@ func TestDashboardSnapshotIncludesWorkflowCatalogAndBoundedHistory(t *testing.T)
 	}
 	if len(snapshot.Workflows) != 1 || snapshot.Workflows[0].ID != workflows.ProjectTest || len(snapshot.WorkflowHistory) != 1 || snapshot.WorkflowHistory[0].ID != "run-1" {
 		t.Fatalf("workflow snapshot missing: catalog=%#v history=%#v", snapshot.Workflows, snapshot.WorkflowHistory)
+	}
+}
+
+func TestDashboardContextsAreSortedLinkedAndMetadataOnly(t *testing.T) {
+	const ordinarySentinel = "ORDINARY-CONTEXT-VALUE-SENTINEL"
+	const secretSentinel = "SECRET-CONTEXT-VALUE-SENTINEL"
+	root := t.TempDir()
+	paths := dashboardContextTestPaths(root)
+	environmentStore := environments.NewStore(paths)
+	if _, err := environmentStore.Add(environments.Environment{ID: "zeta", Exports: map[string]string{}, Secrets: map[string]string{}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := environmentStore.Add(environments.Environment{
+		ID: "alpha", AWSProfile: "sandbox", AWSRegion: "ap-northeast-2", KubeContext: "cluster", KubeNamespace: "tools",
+		Exports: map[string]string{"ZED": ordinarySentinel, "ALPHA": "ordinary"},
+		Secrets: map[string]string{"TOKEN": "sec://service/token", "MISSING": "sec://service/missing"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secretStore := secrets.NewStore(paths)
+	if err := secretStore.Init(); err != nil {
+		t.Fatal(err)
+	}
+	value := []byte(secretSentinel)
+	if _, err := secretStore.Set("service", "token", value, false); err != nil {
+		t.Fatal(err)
+	}
+	for index := range value {
+		value[index] = 0
+	}
+	for _, project := range []struct{ id, directory string }{{"project-z", "project-z"}, {"project-a", "project-a"}} {
+		directory := filepath.Join(root, project.directory)
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := projects.NewStore(paths).AddWithEnvironment(directory, project.id, "personal", "alpha"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	projectItems, err := projects.NewStore(paths).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contexts, warnings := buildDashboardContexts(paths, projectItems)
+	if len(warnings) != 0 || !contexts.RegistryAvailable || len(contexts.Environments) != 2 || contexts.Environments[0].ID != "alpha" || contexts.Environments[1].ID != "zeta" {
+		t.Fatalf("contexts=%#v warnings=%#v", contexts, warnings)
+	}
+	alpha := contexts.Environments[0]
+	if !reflect.DeepEqual(alpha.ExportKeys, []string{"ALPHA", "ZED"}) || !reflect.DeepEqual(alpha.ProjectIDs, []string{"project-a", "project-z"}) {
+		t.Fatalf("keys=%#v projects=%#v", alpha.ExportKeys, alpha.ProjectIDs)
+	}
+	if len(alpha.SecretReferences) != 2 || alpha.SecretReferences[0].Variable != "MISSING" || alpha.SecretReferences[0].Status != "missing" || alpha.SecretReferences[1].Variable != "TOKEN" || alpha.SecretReferences[1].Status != "available" {
+		t.Fatalf("secret references=%#v", alpha.SecretReferences)
+	}
+	if contexts.Summary.Environments != 2 || contexts.Summary.LinkedProjects != 2 || contexts.Summary.SecretReferences != 2 || contexts.Summary.Available != 1 || contexts.Summary.Missing != 1 {
+		t.Fatalf("summary=%#v", contexts.Summary)
+	}
+	encoded, err := json.Marshal(contexts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{ordinarySentinel, secretSentinel, "sec://", paths.AgeIdentityFile, paths.SecretsFile, `"service":`, `"field":`} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("contexts leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestDashboardContextsSanitizeUnavailableStoreAndInvalidReference(t *testing.T) {
+	const identitySentinel = "BROKEN-IDENTITY-SENTINEL"
+	root := t.TempDir()
+	paths := dashboardContextTestPaths(root)
+	if _, err := environments.NewStore(paths).Add(environments.Environment{ID: "dev", Exports: map[string]string{}, Secrets: map[string]string{"TOKEN": "sec://service/token"}}); err != nil {
+		t.Fatal(err)
+	}
+	contexts, warnings := buildDashboardContexts(paths, nil)
+	if len(warnings) != 0 || contexts.Summary.StoreUnavailable != 1 || contexts.Environments[0].SecretReferences[0].Status != "store_unavailable" {
+		t.Fatalf("contexts=%#v warnings=%#v", contexts, warnings)
+	}
+	if err := secrets.NewStore(paths).Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.AgeIdentityFile, []byte(identitySentinel+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	contexts, warnings = buildDashboardContexts(paths, nil)
+	encoded, err := json.Marshal(contexts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 || contexts.Summary.StoreUnavailable != 1 || strings.Contains(string(encoded), identitySentinel) || strings.Contains(string(encoded), paths.AgeIdentityFile) {
+		t.Fatalf("broken identity was not sanitized: contexts=%s warnings=%#v", encoded, warnings)
+	}
+	invalid := projectDashboardSecretReference("TOKEN", "invalid-reference", nil, nil)
+	if invalid.Status != "invalid_reference" {
+		t.Fatalf("invalid projection=%#v", invalid)
+	}
+}
+
+func TestDashboardContextsListSecretsOnceAndCountMissingEnvironmentLinks(t *testing.T) {
+	lister := &countingSecretLister{entries: []secrets.Entry{{Service: "service", Field: "token"}}}
+	items := []environments.Environment{{
+		ID: "dev", Exports: map[string]string{}, Secrets: map[string]string{
+			"AVAILABLE": "sec://service/token", "MISSING": "sec://service/missing", "INVALID": "not-a-reference",
+		},
+	}}
+	projectItems := []projects.Project{{ID: "linked", EnvironmentID: "dev"}, {ID: "missing-link", EnvironmentID: "does-not-exist"}, {ID: "unlinked"}}
+	contexts := projectDashboardContexts(items, projectItems, lister)
+	if lister.calls != 1 || lister.service != "" {
+		t.Fatalf("secret metadata calls=%d service=%q", lister.calls, lister.service)
+	}
+	if contexts.Summary.LinkedProjects != 2 || !reflect.DeepEqual(contexts.Environments[0].ProjectIDs, []string{"linked"}) {
+		t.Fatalf("summary=%#v project_ids=%#v", contexts.Summary, contexts.Environments[0].ProjectIDs)
+	}
+	statuses := contexts.Environments[0].SecretReferences
+	if len(statuses) != 3 || statuses[0].Status != "available" || statuses[1].Status != "invalid_reference" || statuses[2].Status != "missing" {
+		t.Fatalf("statuses=%#v", statuses)
+	}
+}
+
+func TestDashboardSnapshotKeepsServingWhenEnvironmentRegistryFails(t *testing.T) {
+	const registrySentinel = "BROKEN-REGISTRY-SENTINEL"
+	root := t.TempDir()
+	paths := dashboardContextTestPaths(root)
+	if err := os.MkdirAll(filepath.Dir(paths.EnvironmentsFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.EnvironmentsFile, []byte("schema_version = 1\nunknown = '"+registrySentinel+"'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (&dashboardService{
+		paths:     paths,
+		tmux:      &fakeTmuxRuntime{snapshot: tmuxadapter.Snapshot{Available: false, Sessions: []tmuxadapter.Session{}}},
+		workflows: &fakeWorkflowRuntime{},
+	}).Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("snapshot failed instead of degrading: %v", err)
+	}
+	if snapshot.Contexts.RegistryAvailable || snapshot.Contexts.Reason != "environment registry unavailable" || !contains(snapshot.Warnings, "contexts: environment registry unavailable") {
+		t.Fatalf("contexts=%#v warnings=%#v", snapshot.Contexts, snapshot.Warnings)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), registrySentinel) || strings.Contains(string(encoded), paths.EnvironmentsFile) {
+		t.Fatalf("partial snapshot leaked registry diagnostics: %s", encoded)
+	}
+}
+
+func dashboardContextTestPaths(root string) config.Paths {
+	configDir := filepath.Join(root, "config")
+	stateDir := filepath.Join(root, "state")
+	return config.Paths{
+		ConfigDir: configDir, StateDir: stateDir,
+		ConfigFile: filepath.Join(configDir, "config.toml"), ProjectsFile: filepath.Join(configDir, "projects.toml"),
+		EnvironmentsFile: filepath.Join(configDir, "environments.toml"), AgeIdentityFile: filepath.Join(configDir, "age.key"),
+		SecretsFile: filepath.Join(configDir, "secrets.json.age"), AgentsFile: filepath.Join(stateDir, "agents.json"),
+		WorktreesFile: filepath.Join(stateDir, "worktrees.json"), WorkflowsFile: filepath.Join(stateDir, "workflows.json"),
+		ProfilesDir: filepath.Join(configDir, "profiles"), CompatibilityDir: filepath.Join(stateDir, "compatibility"), BackupsDir: filepath.Join(stateDir, "backups"),
 	}
 }
 

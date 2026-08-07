@@ -7,7 +7,7 @@ The embedded web surface has two product routes:
 
 | Route | Purpose |
 |---|---|
-| `/` | Operational Dashboard for live tmux sessions, unified Tasks, projects, worktrees, Git state, and Doctor |
+| `/` | Operational Dashboard for live tmux sessions, unified Tasks, project contexts, worktrees, Git state, and Doctor |
 | `/guide` | Searchable, offline product documentation shipped with the current binary |
 
 `/docs` is an alias for `/guide`. Both pages share the same System, Light, and
@@ -36,6 +36,8 @@ reachable address is not configurable.
 `GET /api/v1/snapshot` returns one schema-v1 Workbench envelope containing:
 
 - projects from the project store;
+- a read-only `contexts` projection with registry availability, environment metadata, project links, export key names,
+  and secret-reference availability status;
 - a live, read-only tmux session/window/pane hierarchy using stable tmux IDs;
 - reconciled managed Agent records and snapshot-only observed tmux Tasks;
 - Git-verified linked worktrees;
@@ -61,6 +63,14 @@ Binbox health is optional. The server invokes only the fixed argument array
 `bb doctor --json`, accepts its schema-v1 capability contract, and strips the
 reported executable paths. Missing, failed, or malformed providers remain
 visible as unavailable health while the snapshot itself succeeds.
+
+For the selected project, the Context panel shows its default environment ID,
+AWS profile/region, Kubernetes context/namespace metadata, ordinary export key
+names, and each secret variable's availability status. It distinguishes an
+unavailable registry, an unlinked project, a missing linked environment, and
+unhealthy secret-reference states. The panel is read-only and never renders
+environment values, raw `sec://` references, secret plaintext, identity/store
+paths, or mutation controls.
 
 ## Appearance
 
@@ -139,6 +149,8 @@ the UI, and recorded in bounded local history.
 - Guide, theme, CSS, and JavaScript assets are embedded in the binary and make
   no remote font, image, analytics, or other network requests;
 - project and task values are passed to backends as argument arrays.
+- Context rendering is an allowlist: only environment metadata, export key
+  names, and normalized secret status are inserted into the DOM.
 
 The token is runtime-only. It is never written to Workbench state, logs, or a
 committed asset.

@@ -58,6 +58,39 @@ type WorkflowRun struct {
 	ResolveSecrets  bool             `json:"resolve_secrets"`
 }
 
+type ContextSecretReference struct {
+	Variable string `json:"variable"`
+	Status   string `json:"status"`
+}
+
+type ContextEnvironment struct {
+	ID               string                   `json:"id"`
+	AWSProfile       string                   `json:"aws_profile,omitempty"`
+	AWSRegion        string                   `json:"aws_region,omitempty"`
+	KubeContext      string                   `json:"kube_context,omitempty"`
+	KubeNamespace    string                   `json:"kube_namespace,omitempty"`
+	ExportKeys       []string                 `json:"export_keys"`
+	ProjectIDs       []string                 `json:"project_ids"`
+	SecretReferences []ContextSecretReference `json:"secret_references"`
+}
+
+type ContextSummary struct {
+	Environments      int `json:"environments"`
+	LinkedProjects    int `json:"linked_projects"`
+	SecretReferences  int `json:"secret_references"`
+	Available         int `json:"available"`
+	Missing           int `json:"missing"`
+	StoreUnavailable  int `json:"store_unavailable"`
+	InvalidReferences int `json:"invalid_references"`
+}
+
+type Contexts struct {
+	RegistryAvailable bool                 `json:"registry_available"`
+	Reason            string               `json:"reason,omitempty"`
+	Summary           ContextSummary       `json:"summary"`
+	Environments      []ContextEnvironment `json:"environments"`
+}
+
 func SafeWorkflowRun(result workflows.Result) WorkflowRun {
 	return WorkflowRun{ID: result.ID, WorkflowID: result.WorkflowID, ProjectID: result.ProjectID, Status: result.Status, ExitCode: result.ExitCode, StartedAt: result.StartedAt, FinishedAt: result.FinishedAt, DurationMillis: result.DurationMillis, OutputTruncated: result.OutputTruncated, PaneID: result.PaneID, SessionName: result.SessionName, EnvironmentID: result.EnvironmentID, ResolveSecrets: result.ResolveSecrets}
 }
@@ -79,6 +112,7 @@ type Snapshot struct {
 	ToolHealth        binboxadapter.Report     `json:"tool_health"`
 	Workflows         []workflows.Availability `json:"workflows"`
 	WorkflowHistory   []WorkflowRun            `json:"workflow_history"`
+	Contexts          Contexts                 `json:"contexts"`
 }
 
 type ActionRequest struct {

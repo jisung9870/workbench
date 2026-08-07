@@ -244,6 +244,21 @@ h3 { font-size: 17px; margin-bottom: 0; }
 .row:first-child { border-top: 0; }
 .row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row span { color: var(--muted); }
+.contexts-panel { grid-column: 1 / -1; }
+.context-body { display: grid; grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1fr) minmax(0, 1fr); gap: 18px; margin-top: 14px; }
+.context-state { grid-column: 1 / -1; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.context-state.error { border-color: var(--danger-line); background: var(--danger-soft); }
+.context-state p, .context-group p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.context-metadata { display: grid; grid-template-columns: minmax(110px, auto) minmax(0, 1fr); gap: 8px 12px; margin: 0; font-size: 12px; }
+.context-metadata dt { color: var(--muted); }
+.context-metadata dd { margin: 0; overflow-wrap: anywhere; }
+.context-group { min-width: 0; }
+.context-group > strong { display: block; margin-bottom: 9px; font-size: 12px; }
+.context-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.context-tags code { padding: 4px 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); font-size: 11px; }
+.context-secret-list { display: grid; gap: 6px; }
+.context-secret-list > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.context-secret-list code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .empty { min-height: 60vh; display: grid; place-content: center; text-align: center; color: var(--muted); }
 .empty span { font-size: 42px; }
 .empty h2 { color: var(--text); margin: 12px 0 6px; }
@@ -394,6 +409,7 @@ td { color: var(--muted); }
   .project-hero { display: block; }
   .hero-actions { justify-content: flex-start; }
   .metrics { grid-template-columns: 1fr; }
+  .context-body { grid-template-columns: 1fr; }
   .grid { display: block; }
   .panel { margin-bottom: 12px; }
   .cards { grid-template-columns: 1fr; }
