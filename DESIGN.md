@@ -4,7 +4,7 @@
 
 - Status: Active
 - Last refreshed: 2026-08-07
-- Primary product surfaces: loopback Dashboard (`/`) and embedded documentation site (`/guide`)
+- Primary product surfaces: concise loopback Overview (`/`), category pages (`/projects`, `/activity`, `/settings`, `/system`), and embedded documentation site (`/guide`)
 - Evidence reviewed: `README.md`, `docs/*.md`, `internal/dashboard/assets/*`, the schema-v1 Dashboard `contexts`
   snapshot contract, `internal/dashboard/dashboard.go`, `internal/dashboard/dashboard_test.go`, and the parent architecture plans in
   `../plan/`
@@ -34,11 +34,10 @@
 
 ## Information architecture
 
-- Primary navigation: Dashboard, Guide, source repository
-- Core routes/screens: `/` operational Dashboard; `/guide` overview, quickstart, concepts, guides, reference,
+- Primary navigation: Overview, Projects, Activity, Settings, System, Guide, source repository
+- Core routes/screens: `/` summary and category entry points; `/projects` project actions and project-scoped detail; `/activity` event, session, scheduler, and task detail; `/settings` profile and Secret management; `/system` Doctor, runtime, and tool health; `/guide` overview, quickstart, concepts, guides, reference,
   operations, security, troubleshooting, and glossary
-- Content hierarchy: product definition and quickstart first; mental model before procedures; exact reference after
-  task guides; recovery and limitations near every risky boundary
+- Content hierarchy: four live summary metrics and category entry points on Overview; operational detail only after category navigation; product definition and quickstart first in Guide; mental model before procedures; exact reference after task guides; recovery and limitations near every risky boundary
 
 ## Design principles
 
@@ -65,7 +64,7 @@
 
 - Existing components to reuse: top bar, brand mark, project list, health card, metric cards, panels, rows, Agent
   cards, status pills, notices, and typed action buttons
-- New/changed components: theme switch, product navigation, guide sidebar, search, section cards, callouts, command
+- New/changed components: theme switch, product navigation, compact scroll-bounded project rail, collapsed runtime summaries, guide sidebar, search, section cards, callouts, command
   blocks, architecture flow, product screenshot figure/caption, feature matrix, page table of contents, and a
   collapsed Agent history disclosure with registry provenance, an explicitly confirmed clear action, and a read-only
   selected-project Context panel showing only AWS/Kubernetes metadata, export key names, and secret-reference status

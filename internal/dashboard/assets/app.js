@@ -3,6 +3,12 @@ const state = { snapshot: null, projectId: null, taskId: null };
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 
+document.querySelectorAll("[data-page-link]").forEach(link => {
+  const active = document.body.classList.contains(`page-${link.dataset.pageLink}`);
+  link.classList.toggle("active", active);
+  if (active) link.setAttribute("aria-current", "page");
+});
+
 function notice(message, error = false) {
   const element = $("notice");
   element.textContent = message;
@@ -80,6 +86,10 @@ function render() {
   $("project-count").textContent = data.projects.length;
 
   const missing = data.doctor.summary.unavailable_core;
+  $("category-project-count").textContent = data.projects.length;
+  $("category-activity-count").textContent = (data.activity || []).length;
+  $("category-settings-status").textContent = data.profile_settings?.available ? data.profile : "Review";
+  $("category-system-status").textContent = missing ? `${missing} missing` : "Ready";
   $("health-title").textContent = missing ? `${missing} core checks missing` : "Core ready";
   $("health-detail").textContent = `${data.doctor.summary.available} available · ${data.doctor.summary.unavailable_optional} optional missing`;
   document.querySelector(".pulse").classList.toggle("ok", !missing);

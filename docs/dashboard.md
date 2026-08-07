@@ -4,15 +4,24 @@ The Dashboard is a client of the Workbench core. It is not a second state owner
 and does not parse browser-side copies of registry files. It may run in the
 foreground or as an explicitly started background process.
 
-The embedded web surface has two product routes:
+The embedded web surface has a concise Overview, four operational category routes, and the Guide:
 
 | Route | Purpose |
 |---|---|
-| `/` | Operational Dashboard for live tmux sessions, unified Tasks, project contexts, worktrees, Git state, and Doctor |
+| `/` | At-a-glance summary and entry points to each operational category |
+| `/projects` | Project actions, Tasks, contexts, worktrees, Git state, and workflows |
+| `/activity` | Activity history, live tmux sessions, scheduler state, and task locations |
+| `/settings` | Active Profile and metadata-only Secret management |
+| `/system` | Workbench Doctor, tool health, and runtime status |
 | `/guide` | Searchable, offline product documentation shipped with the current binary |
 
 `/docs` is an alias for `/guide`. Both pages share the same System, Light, and
 Dark theme control.
+
+The left rail is intentionally bounded to the viewport. Long project lists
+scroll inside the rail, while tmux, scheduler, and unregistered-task details
+stay collapsed until requested. Category pages keep their primary detail in the
+main content area.
 
 ## Start and stop
 

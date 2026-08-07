@@ -8,35 +8,35 @@
   <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="/assets/style.css">
 </head>
-<body>
+<body class="dashboard-page page-{{.Page}}">
   <a class="skip-link" href="#main">Skip to workspace</a>
   <header class="topbar">
     <div class="topbar-start">
       <a class="brand" href="/" aria-label="Workbench Dashboard"><span class="brand-mark">W</span><span><strong>Workbench</strong><small>Local control plane</small></span></a>
-      <nav class="product-nav" aria-label="Product"><a class="active" href="/" aria-current="page">Dashboard</a><a href="/guide">Guide</a></nav>
+      <nav class="product-nav" aria-label="Product"><a data-page-link="dashboard" href="/">Overview</a><a data-page-link="projects" href="/projects">Projects</a><a data-page-link="activity" href="/activity">Activity</a><a data-page-link="settings" href="/settings">Settings</a><a data-page-link="system" href="/system">System</a><a href="/guide">Guide</a></nav>
     </div>
     <div class="top-status"><span id="platform">loading</span><span class="dot">•</span><span id="profile">profile</span><label class="theme-control"><span>Theme</span><select id="theme-select" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label><button id="refresh" type="button">Refresh</button></div>
   </header>
   <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
   <main id="main" class="layout">
     <aside class="sidebar" aria-label="Projects">
-      <div class="section-heading"><div><span class="eyebrow">Workspace</span><h1>Projects</h1></div><span id="project-count" class="count">0</span></div>
+      <div class="section-heading projects-heading"><div><span class="eyebrow">Workspace</span><h1>Projects</h1></div><span id="project-count" class="count">0</span></div>
       <nav id="projects" class="project-list"></nav>
       <div class="health-card"><span class="pulse"></span><div><strong id="health-title">Checking system</strong><small id="health-detail">Workbench Doctor</small></div></div>
-      <section class="session-observer" aria-labelledby="tmux-heading">
-        <div class="section-heading"><div><span class="eyebrow">Live workspace</span><h2 id="tmux-heading">tmux sessions</h2></div><span id="tmux-session-count" class="count">0</span></div>
+      <details class="session-observer" aria-labelledby="tmux-heading">
+        <summary class="section-heading"><div><span class="eyebrow">Live workspace</span><h2 id="tmux-heading">tmux sessions</h2></div><span id="tmux-session-count" class="count">0</span></summary>
         <p id="tmux-availability" class="observer-note">Checking tmux…</p>
         <div id="tmux-sessions" class="session-list"></div>
-      </section>
-      <section class="session-observer" aria-labelledby="scheduler-heading">
-        <div class="section-heading"><div><span class="eyebrow">Background runtime</span><h2 id="scheduler-heading">Scheduler</h2></div><span id="scheduler-status" class="status">checking</span></div>
+      </details>
+      <details class="session-observer" aria-labelledby="scheduler-heading">
+        <summary class="section-heading"><div><span class="eyebrow">Background runtime</span><h2 id="scheduler-heading">Scheduler</h2></div><span id="scheduler-status" class="status">checking</span></summary>
         <p id="scheduler-availability" class="observer-note">Checking scheduler…</p>
         <div id="scheduler-jobs" class="session-list"></div>
-      </section>
-      <section class="session-observer" aria-labelledby="unregistered-heading">
-        <div class="section-heading"><div><span class="eyebrow">Outside registry</span><h2 id="unregistered-heading">Unregistered Tasks</h2></div><span id="unregistered-task-count" class="count">0</span></div>
+      </details>
+      <details class="session-observer" aria-labelledby="unregistered-heading">
+        <summary class="section-heading"><div><span class="eyebrow">Outside registry</span><h2 id="unregistered-heading">Unregistered Tasks</h2></div><span id="unregistered-task-count" class="count">0</span></summary>
         <div id="unregistered-tasks" class="cards compact-cards"></div>
-      </section>
+      </details>
     </aside>
     <section class="content" aria-label="Project workspace">
       <section class="operations-overview" aria-labelledby="overview-heading">
@@ -47,6 +47,12 @@
           <article><span>tmux sessions</span><strong id="overview-sessions">0</strong><small id="overview-session-detail">0 detached</small></article>
           <article><span>Tool health</span><strong id="overview-tool-health">—</strong><small id="overview-tool-detail">binbox unavailable</small></article>
         </section>
+        <nav class="category-grid" aria-label="Workbench categories">
+          <a href="/projects"><span class="category-icon" aria-hidden="true">P</span><span><strong>Projects</strong><small>Tasks, worktrees, changes, contexts, and workflows</small></span><span id="category-project-count" class="count">0</span></a>
+          <a href="/activity"><span class="category-icon" aria-hidden="true">A</span><span><strong>Activity</strong><small>Events, live sessions, scheduler, and task locations</small></span><span id="category-activity-count" class="count">0</span></a>
+          <a href="/settings"><span class="category-icon" aria-hidden="true">S</span><span><strong>Settings</strong><small>Profile, backend preferences, and Secrets</small></span><span id="category-settings-status" class="count">—</span></a>
+          <a href="/system"><span class="category-icon" aria-hidden="true">H</span><span><strong>System</strong><small>Workbench Doctor, tool health, and runtime status</small></span><span id="category-system-status" class="count">—</span></a>
+        </nav>
         <div class="overview-grid">
           <section class="panel overview-panel"><div class="panel-heading"><div><span class="eyebrow">Needs review</span><h3>Attention</h3></div></div><div id="overview-attention" class="rows"></div></section>
           <section class="panel overview-panel"><div class="panel-heading"><div><span class="eyebrow">Resume</span><h3>Work locations</h3></div></div><div id="overview-locations" class="rows"></div></section>
@@ -69,6 +75,7 @@
           <div id="tool-catalog" class="rows"></div>
         </section>
       </div>
+      <section class="panel doctor-panel system-only" aria-labelledby="doctor-heading"><div class="panel-heading"><div><span class="eyebrow">Capabilities</span><h2 id="doctor-heading">Workbench Doctor</h2></div><button id="doctor-details" type="button">All checks</button></div><div id="doctor" class="rows"></div></section>
       <section class="panel secrets-panel" aria-labelledby="secrets-heading">
         <div class="panel-heading"><div><span class="eyebrow">Encrypted local store</span><h2 id="secrets-heading">Secrets</h2></div><span id="secret-status" class="status">checking</span></div>
         <p class="workflow-note">Only service and field names are displayed. Secret values are accepted for writes and are never returned by the Dashboard API.</p>
@@ -108,7 +115,6 @@
           </section>
           <section class="panel"><div class="panel-heading"><div><span class="eyebrow">Git</span><h3>Worktrees</h3></div></div><div id="worktrees" class="rows"></div></section>
           <section class="panel"><div class="panel-heading"><div><span class="eyebrow">Repository</span><h3>Changed files</h3></div></div><div id="changes" class="rows"></div></section>
-          <section class="panel"><div class="panel-heading"><div><span class="eyebrow">Capabilities</span><h3>Doctor</h3></div><button id="doctor-details" type="button">All checks</button></div><div id="doctor" class="rows"></div></section>
           <section class="panel workflows-panel"><div class="panel-heading"><div><span class="eyebrow">Allowlisted actions</span><h3>Workflows</h3></div></div><p class="workflow-note">Only fixed Workbench workflow IDs are available. Commands, paths, arguments, prompts, and environment values cannot be supplied here.</p><div id="workflows" class="workflow-list"></div></section>
           <section class="panel"><div class="panel-heading"><div><span class="eyebrow">Bounded local history</span><h3>Recent workflow results</h3></div></div><div id="workflow-history" class="rows"></div></section>
         </div>

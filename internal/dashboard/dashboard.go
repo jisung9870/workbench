@@ -253,8 +253,8 @@ func NewHandler(service Service, token string) (*Handler, error) {
 func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	setSecurityHeaders(writer)
 	switch request.URL.Path {
-	case "/":
-		handler.serveIndex(writer, request)
+	case "/", "/projects", "/activity", "/settings", "/system":
+		handler.serveIndex(writer, request, dashboardPage(request.URL.Path))
 	case "/guide", "/guide/", "/docs", "/docs/":
 		handler.serveGuide(writer, request)
 	case "/assets/app.js":
@@ -290,7 +290,22 @@ func (handler *Handler) serveGuide(writer http.ResponseWriter, request *http.Req
 	}
 }
 
-func (handler *Handler) serveIndex(writer http.ResponseWriter, request *http.Request) {
+func dashboardPage(path string) string {
+	switch path {
+	case "/projects":
+		return "projects"
+	case "/activity":
+		return "activity"
+	case "/settings":
+		return "settings"
+	case "/system":
+		return "system"
+	default:
+		return "dashboard"
+	}
+}
+
+func (handler *Handler) serveIndex(writer http.ResponseWriter, request *http.Request, page string) {
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		methodNotAllowed(writer, http.MethodGet)
 		return
@@ -299,7 +314,7 @@ func (handler *Handler) serveIndex(writer http.ResponseWriter, request *http.Req
 	if request.Method == http.MethodHead {
 		return
 	}
-	if err := handler.index.Execute(writer, map[string]string{"Token": handler.token}); err != nil {
+	if err := handler.index.Execute(writer, map[string]string{"Token": handler.token, "Page": page}); err != nil {
 		http.Error(writer, "render dashboard", http.StatusInternalServerError)
 	}
 }
