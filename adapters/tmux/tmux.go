@@ -207,8 +207,8 @@ func (adapter *Adapter) Detect(ctx context.Context, _ backend.OpenRequest) backe
 }
 
 func (adapter *Adapter) OpenProject(ctx context.Context, request backend.OpenRequest) (backend.OpenResult, error) {
-	if _, _, err := sessionstate.NewManager(adapter.executor, adapter.getenv).Ensure(ctx, request.Project); err != nil {
-		return adapter.result(request.Project.ID, backend.ProcessResult{}), fmt.Errorf("ensure tmux session: %w", err)
+	if _, _, process, err := sessionstate.NewManager(adapter.executor, adapter.getenv).Ensure(ctx, request.Project); err != nil {
+		return adapter.result(request.Project.ID, process), fmt.Errorf("ensure tmux session: %w", err)
 	}
 	command, err := adapter.executor.LookPath("tmux")
 	if err != nil {

@@ -82,6 +82,10 @@ func TestManagerRecordsLaunchFailure(t *testing.T) {
 	if err == nil || task.State != Failed || task.ExitCode == nil || *task.ExitCode != 9 {
 		t.Fatalf("launch failure was not recorded: task=%#v err=%v", task, err)
 	}
+	var launchFailure *LaunchError
+	if !errors.As(err, &launchFailure) || launchFailure.Result.ExitCode != 9 {
+		t.Fatalf("launch diagnostics were not preserved: %#v err=%v", launchFailure, err)
+	}
 	stored, found, loadErr := state.Show(task.ID)
 	if loadErr != nil || !found || stored.State != Failed {
 		t.Fatalf("failed task is not queryable: %#v found=%v err=%v", stored, found, loadErr)

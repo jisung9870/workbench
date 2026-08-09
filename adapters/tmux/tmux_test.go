@@ -196,3 +196,20 @@ func managedOpenExecutor(projectID, canonicalPath string) *fakeExecutor {
 		errors: []error{errors.New("session missing")},
 	}
 }
+
+func TestOpenProjectPreservesEnsureFailureDiagnostics(t *testing.T) {
+	executor := &fakeExecutor{
+		results: []backend.ProcessResult{
+			{Command: []string{"/usr/bin/tmux", "has-session"}, ExitCode: 1},
+			{Command: []string{"/usr/bin/tmux", "new-session"}, ExitCode: 7, Stdout: "provider stdout\n", Stderr: "provider stderr\n"},
+		},
+		errors: []error{errors.New("session missing"), errors.New("exit status 7")},
+	}
+	result, err := New(executor, nil).OpenProject(context.Background(), backend.OpenRequest{Project: projects.Project{ID: "alpha", Path: t.TempDir()}})
+	if err == nil {
+		t.Fatal("failed tmux session creation was reported as success")
+	}
+	if result.ExitCode != 7 || result.Stdout != "provider stdout\n" || result.Stderr != "provider stderr\n" {
+		t.Fatalf("provider diagnostics were lost: %#v", result)
+	}
+}

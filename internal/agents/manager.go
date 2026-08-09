@@ -175,7 +175,7 @@ func (manager *Manager) Start(ctx context.Context, request StartRequest) (Task, 
 	}
 	task = updated
 	if launchErr != nil {
-		return task, nonEmpty(backup), launchErr
+		return task, nonEmpty(backup), &LaunchError{Result: result, Cause: launchErr}
 	}
 	return task, nonEmpty(backup), nil
 }

@@ -75,9 +75,9 @@ func (runtime *fakeSessionRuntime) Stop(_ context.Context, project projects.Proj
 	runtime.project, runtime.operation = project, "stop"
 	return runtime.item, runtime.err
 }
-func (runtime *fakeSessionRuntime) Ensure(_ context.Context, project projects.Project) (sessionstate.Item, bool, error) {
+func (runtime *fakeSessionRuntime) Ensure(_ context.Context, project projects.Project) (sessionstate.Item, bool, backend.ProcessResult, error) {
 	runtime.project, runtime.operation = project, "ensure"
-	return runtime.item, runtime.changed, runtime.err
+	return runtime.item, runtime.changed, backend.ProcessResult{ExitCode: -1}, runtime.err
 }
 
 type countingSecretLister struct {

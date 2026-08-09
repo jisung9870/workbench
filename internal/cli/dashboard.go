@@ -55,7 +55,7 @@ type sessionRuntime interface {
 	Attach(context.Context, string, bool) (sessionstate.Item, error)
 	Adopt(context.Context, projects.Project) (sessionstate.Item, bool, error)
 	Stop(context.Context, projects.Project) (sessionstate.Item, error)
-	Ensure(context.Context, projects.Project) (sessionstate.Item, bool, error)
+	Ensure(context.Context, projects.Project) (sessionstate.Item, bool, backend.ProcessResult, error)
 }
 
 type workflowRuntime interface {
@@ -705,14 +705,16 @@ func (service *dashboardService) openProject(ctx context.Context, request dashbo
 		return dashboard.ActionResult{}, dashboardCommandError(backendSelectionError(err))
 	}
 	if selection.Session == backend.Tmux {
-		if _, _, ensureErr := service.sessionManager(executor).Ensure(ctx, project); ensureErr != nil {
-			return dashboard.ActionResult{}, dashboardCommandError(sessionError(ensureErr))
+		if _, _, process, ensureErr := service.sessionManager(executor).Ensure(ctx, project); ensureErr != nil {
+			commandErr := sessionError(ensureErr)
+			commandErr.Details = diagnosticDetails(process.Command, process.ExitCode, process.Stdout, process.Stderr)
+			return dashboard.ActionResult{}, dashboardCommandError(commandErr)
 		}
 	}
 	openRequest.Session = selection.Session
 	result, err := selection.Adapter.OpenProject(ctx, openRequest)
 	if err != nil {
-		return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusInternalServerError, Code: "BACKEND_EXECUTION_FAILED", Message: err.Error()}
+		return dashboard.ActionResult{}, &dashboard.ActionError{Status: http.StatusInternalServerError, Code: "BACKEND_EXECUTION_FAILED", Message: err.Error(), Details: diagnosticDetails(result.Command, result.ExitCode, result.Stdout, result.Stderr)}
 	}
 	session := result.Session
 	if session == "" {

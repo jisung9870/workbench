@@ -27,8 +27,18 @@ type LaunchRequest struct {
 type LaunchResult struct {
 	Command  []string
 	ExitCode int
+	Stdout   string
+	Stderr   string
 	Waited   bool
 }
+
+type LaunchError struct {
+	Result LaunchResult
+	Cause  error
+}
+
+func (err *LaunchError) Error() string { return err.Cause.Error() }
+func (err *LaunchError) Unwrap() error { return err.Cause }
 
 type Runtime interface {
 	Name() backend.Name
@@ -78,7 +88,7 @@ func (runtime *ShellRuntime) Launch(ctx context.Context, request LaunchRequest) 
 			return request.OnStarted(fmt.Sprintf("process:%d", pid), map[string]string{"ownership": "attached"}, pid)
 		},
 	})
-	return LaunchResult{Command: process.Command, ExitCode: process.ExitCode, Waited: true}, err
+	return launchFromProcess(process, true), err
 }
 func (runtime *ShellRuntime) Alive(context.Context, Task) (bool, error) {
 	return false, &UnsupportedError{Backend: runtime.Name(), Operation: "inspect", Reason: "attached process identity is not safely reconnectable"}
@@ -114,8 +124,8 @@ func (runtime *TmuxRuntime) Detect(ctx context.Context, _ backend.OpenRequest) b
 	return backend.Capability{Backend: runtime.Name(), Available: true, Version: version, Capabilities: []string{"agents_start", "agents_jump", "agents_stop"}}
 }
 func (runtime *TmuxRuntime) Launch(ctx context.Context, request LaunchRequest) (LaunchResult, error) {
-	if _, _, err := sessions.NewManager(runtime.executor, runtime.getenv).Ensure(ctx, request.Project); err != nil {
-		return LaunchResult{ExitCode: -1}, fmt.Errorf("ensure tmux session: %w", err)
+	if _, _, process, err := sessions.NewManager(runtime.executor, runtime.getenv).Ensure(ctx, request.Project); err != nil {
+		return launchFromProcess(process, false), fmt.Errorf("ensure tmux session: %w", err)
 	}
 	command, err := runtime.executor.LookPath("tmux")
 	if err != nil {
@@ -387,7 +397,7 @@ func (runtime *WindowsTerminalRuntime) get(key string) string {
 }
 
 func launchFromProcess(process backend.ProcessResult, waited bool) LaunchResult {
-	return LaunchResult{Command: process.Command, ExitCode: process.ExitCode, Waited: waited}
+	return LaunchResult{Command: process.Command, ExitCode: process.ExitCode, Stdout: process.Stdout, Stderr: process.Stderr, Waited: waited}
 }
 
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }

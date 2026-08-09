@@ -50,6 +50,9 @@ second terminal or workspace.
   killed by an arbitrary timeout.
 - Captured stdout, stderr, exit code, command array, and a backend-specific
   reference are retained on failure.
+- tmux session preflight returns the failed `ProcessResult` to project-open and
+  Agent callers; CLI streams provider stdout/stderr on their original channels,
+  while structured callers receive command, exit code, stdout, and stderr details.
 - Agent launch callbacks persist backend ownership immediately after the child
   process, tmux pane, cmux workspace, or Windows Terminal launch is created.
 - tmux and cmux revalidate their exact registered target before a destructive

@@ -135,7 +135,7 @@ func testProject(t *testing.T) projects.Project {
 func TestEnsureCreatesManagedSessionAndSetsManagedFlagLast(t *testing.T) {
 	executor := newFakeExecutor()
 	project := testProject(t)
-	item, created, err := NewManager(executor, nil).Ensure(context.Background(), project)
+	item, created, _, err := NewManager(executor, nil).Ensure(context.Background(), project)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestEnsurePreservesLegacySessionWithoutAdopting(t *testing.T) {
 	executor := newFakeExecutor()
 	project := testProject(t)
 	executor.sessions[project.ID] = &fakeSession{windows: 1, start: project.Path, options: map[string]string{}}
-	item, created, err := NewManager(executor, nil).Ensure(context.Background(), project)
+	item, created, _, err := NewManager(executor, nil).Ensure(context.Background(), project)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,5 +318,34 @@ func TestListClassifiesAndSortsOwnership(t *testing.T) {
 		items[1].Name != "legacy" || items[1].Ownership != Legacy ||
 		items[2].Name != "managed" || items[2].Ownership != Managed {
 		t.Fatalf("unexpected ownership ordering: %#v", items)
+	}
+}
+
+type failingCreateExecutor struct {
+	*fakeExecutor
+	result backend.ProcessResult
+	err    error
+}
+
+func (executor *failingCreateExecutor) Run(ctx context.Context, request backend.ProcessRequest) (backend.ProcessResult, error) {
+	if len(request.Args) > 0 && request.Args[0] == "new-session" {
+		executor.calls = append(executor.calls, request)
+		return executor.result, executor.err
+	}
+	return executor.fakeExecutor.Run(ctx, request)
+}
+
+func TestEnsureReturnsFailedCreateProcessResult(t *testing.T) {
+	executor := &failingCreateExecutor{
+		fakeExecutor: newFakeExecutor(),
+		result:       backend.ProcessResult{Command: []string{"/usr/bin/tmux", "new-session"}, ExitCode: 7, Stdout: "provider stdout\n", Stderr: "provider stderr\n"},
+		err:          errors.New("exit status 7"),
+	}
+	_, created, process, err := NewManager(executor, nil).Ensure(context.Background(), testProject(t))
+	if err == nil || created {
+		t.Fatalf("failed session creation was not preserved: created=%v err=%v", created, err)
+	}
+	if process.ExitCode != 7 || process.Stdout != "provider stdout\n" || process.Stderr != "provider stderr\n" {
+		t.Fatalf("provider diagnostics were lost: %#v", process)
 	}
 }

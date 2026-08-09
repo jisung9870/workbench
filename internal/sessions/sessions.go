@@ -136,31 +136,32 @@ func (manager *Manager) Show(ctx context.Context, name string) (Item, error) {
 	return Item{}, &NotFoundError{Name: name}
 }
 
-func (manager *Manager) Ensure(ctx context.Context, project projects.Project) (Item, bool, error) {
+func (manager *Manager) Ensure(ctx context.Context, project projects.Project) (Item, bool, backend.ProcessResult, error) {
+	noProcess := backend.ProcessResult{ExitCode: -1}
 	path, err := projects.CanonicalPath(project.Path)
 	if err != nil {
-		return Item{}, false, err
+		return Item{}, false, noProcess, err
 	}
 	command, err := manager.command()
 	if err != nil {
-		return Item{}, false, err
+		return Item{}, false, noProcess, err
 	}
 	target := exactTarget(project.ID)
 	_, hasErr := manager.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"has-session", "-t", target}})
 	if hasErr == nil {
 		item, showErr := manager.Show(ctx, project.ID)
 		if showErr != nil {
-			return Item{}, false, showErr
+			return Item{}, false, noProcess, showErr
 		}
 		if item.Ownership == Foreign {
-			return Item{}, false, &ConflictError{Message: fmt.Sprintf("tmux session %q has incomplete Workbench ownership metadata", project.ID)}
+			return Item{}, false, noProcess, &ConflictError{Message: fmt.Sprintf("tmux session %q has incomplete Workbench ownership metadata", project.ID)}
 		}
 		if item.Managed {
 			if verifyErr := verifyProject(item, project.ID, path); verifyErr != nil {
-				return Item{}, false, verifyErr
+				return Item{}, false, noProcess, verifyErr
 			}
 		}
-		return item, false, nil
+		return item, false, noProcess, nil
 	}
 
 	created, createErr := manager.executor.Run(ctx, backend.ProcessRequest{
@@ -168,20 +169,20 @@ func (manager *Manager) Ensure(ctx context.Context, project projects.Project) (I
 		Args: []string{"new-session", "-d", "-s", project.ID, "-c", path},
 	})
 	if createErr != nil {
-		return Item{}, false, fmt.Errorf("create tmux session: %w", createErr)
+		return Item{}, false, created, fmt.Errorf("create tmux session: %w", createErr)
 	}
 	if metadataErr := manager.setOwnership(ctx, command, project.ID, path); metadataErr != nil {
-		_, cleanupErr := manager.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"kill-session", "-t", target}})
+		cleanup, cleanupErr := manager.executor.Run(ctx, backend.ProcessRequest{Name: command, Args: []string{"kill-session", "-t", target}})
 		if cleanupErr != nil {
-			return Item{}, false, errors.Join(fmt.Errorf("set tmux session ownership: %w", metadataErr), fmt.Errorf("clean up newly created session: %w", cleanupErr))
+			return Item{}, false, cleanup, errors.Join(fmt.Errorf("set tmux session ownership: %w", metadataErr), fmt.Errorf("clean up newly created session: %w", cleanupErr))
 		}
-		return Item{}, false, fmt.Errorf("set tmux session ownership: %w", metadataErr)
+		return Item{}, false, noProcess, fmt.Errorf("set tmux session ownership: %w", metadataErr)
 	}
 	item, showErr := manager.Show(ctx, project.ID)
 	if showErr != nil {
-		return Item{}, false, fmt.Errorf("read created tmux session after %v: %w", created.Command, showErr)
+		return Item{}, false, created, fmt.Errorf("read created tmux session after %v: %w", created.Command, showErr)
 	}
-	return item, true, nil
+	return item, true, created, nil
 }
 
 func (manager *Manager) Adopt(ctx context.Context, project projects.Project) (Item, bool, error) {

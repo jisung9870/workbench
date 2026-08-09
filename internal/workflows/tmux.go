@@ -22,7 +22,7 @@ func NewTmuxLauncher(executor backend.Executor) *TmuxLauncher {
 var panePattern = regexp.MustCompile(`^%[0-9]+$`)
 
 func (l *TmuxLauncher) Launch(ctx context.Context, projectID, cwd, runID, executable string) (LaunchLocation, error) {
-	if _, _, err := sessions.NewManager(l.executor, nil).Ensure(ctx, projects.Project{ID: projectID, Path: cwd}); err != nil {
+	if _, _, _, err := sessions.NewManager(l.executor, nil).Ensure(ctx, projects.Project{ID: projectID, Path: cwd}); err != nil {
 		var unavailable *backend.UnavailableError
 		if errors.As(err, &unavailable) {
 			return LaunchLocation{}, errorsUnavailable(unavailable.Error())

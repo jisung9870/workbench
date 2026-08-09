@@ -743,6 +743,10 @@ func runAgents(args []string, paths config.Paths, stdout, stderr io.Writer) *com
 		}
 		task, backups, err := manager.Start(ctx, agents.StartRequest{ProjectID: positionals[0], WorktreeID: options["--worktree"], AgentKind: options["--agent"], Backend: requested})
 		if err != nil {
+			var launchErr *agents.LaunchError
+			if errors.As(err, &launchErr) {
+				writeProcessDiagnostics(stdout, stderr, launchErr.Result.Stdout, launchErr.Result.Stderr)
+			}
 			return agentError(err)
 		}
 		fmt.Fprintf(stdout, "%s %s\t%s\t%s\t%s\n", task.State, task.ID, task.AgentKind, task.Backend, task.CWD)
@@ -811,6 +815,12 @@ func newAgentManager(paths config.Paths, stdout, stderr io.Writer) *agents.Manag
 }
 
 func agentError(err error) *commandError {
+	var launchErr *agents.LaunchError
+	if errors.As(err, &launchErr) {
+		result := agentError(launchErr.Cause)
+		result.Details = diagnosticDetails(launchErr.Result.Command, launchErr.Result.ExitCode, launchErr.Result.Stdout, launchErr.Result.Stderr)
+		return result
+	}
 	var invalidErr *agents.InvalidError
 	if errors.As(err, &invalidErr) {
 		return &commandError{ExitCode: ExitArgument, Code: "INVALID_ARGUMENT", Message: invalidErr.Error()}
@@ -1033,8 +1043,11 @@ func runOpen(args []string, paths config.Paths, stdout, stderr io.Writer) *comma
 		fmt.Fprintf(stderr, "warning: %s\n", warning)
 	}
 	if session == backend.Tmux {
-		if _, _, ensureErr := sessionstate.NewManager(executor, os.Getenv).Ensure(context.Background(), project); ensureErr != nil {
-			return sessionError(ensureErr)
+		if _, _, process, ensureErr := sessionstate.NewManager(executor, os.Getenv).Ensure(context.Background(), project); ensureErr != nil {
+			writeProcessDiagnostics(stdout, stderr, process.Stdout, process.Stderr)
+			result := sessionError(ensureErr)
+			result.Details = diagnosticDetails(process.Command, process.ExitCode, process.Stdout, process.Stderr)
+			return result
 		}
 	}
 	result, openErr := selection.Adapter.OpenProject(context.Background(), request)
@@ -2198,6 +2211,19 @@ func invalid(format string, values ...any) *commandError {
 
 func configError(err error) *commandError {
 	return &commandError{ExitCode: ExitArgument, Code: "CONFIG_INVALID", Message: err.Error()}
+}
+
+func writeProcessDiagnostics(stdout, stderr io.Writer, processStdout, processStderr string) {
+	if processStdout != "" {
+		fmt.Fprint(stdout, processStdout)
+	}
+	if processStderr != "" {
+		fmt.Fprint(stderr, processStderr)
+	}
+}
+
+func diagnosticDetails(command []string, exitCode int, processStdout, processStderr string) map[string]any {
+	return map[string]any{"command": command, "exit_code": exitCode, "stdout": processStdout, "stderr": processStderr}
 }
 
 func generalError(err error) *commandError {

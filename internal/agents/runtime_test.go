@@ -293,3 +293,33 @@ func TestShellStopRefusesPIDGuess(t *testing.T) {
 		t.Fatalf("shell stop should be unavailable: %v", err)
 	}
 }
+
+func TestTmuxLaunchPreservesEnsureFailureDiagnostics(t *testing.T) {
+	executor := &fakeExecutor{lookups: map[string]string{"tmux": "/usr/bin/tmux"}}
+	executor.run = func(request backend.ProcessRequest) (backend.ProcessResult, error) {
+		result := backend.ProcessResult{Command: append([]string{request.Name}, request.Args...), ExitCode: 0}
+		switch request.Args[0] {
+		case "has-session":
+			result.ExitCode = 1
+			return result, errors.New("session missing")
+		case "new-session":
+			result.ExitCode = 7
+			result.Stdout = "provider stdout\n"
+			result.Stderr = "provider stderr\n"
+			return result, errors.New("exit status 7")
+		default:
+			return result, nil
+		}
+	}
+	result, err := NewTmuxRuntime(executor, nil).Launch(context.Background(), LaunchRequest{
+		Task:       Task{ID: "task-1", AgentKind: "codex", CWD: t.TempDir()},
+		Project:    projects.Project{ID: "alpha", Path: t.TempDir()},
+		Executable: "/usr/bin/codex",
+	})
+	if err == nil {
+		t.Fatal("failed tmux session creation was reported as success")
+	}
+	if result.ExitCode != 7 || result.Stdout != "provider stdout\n" || result.Stderr != "provider stderr\n" {
+		t.Fatalf("provider diagnostics were lost: %#v", result)
+	}
+}
