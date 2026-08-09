@@ -429,7 +429,7 @@ func TestSecretsEditUsesProtectedTemporaryFileAndRemovesIt(t *testing.T) {
 		t.Fatal(stderr.String())
 	}
 	editor := filepath.Join(root, "editor.sh")
-	if err := os.WriteFile(editor, []byte("#!/bin/sh\n[ \"$(stat -f %Lp \"$1\" 2>/dev/null || stat -c %a \"$1\")\" = 600 ] || exit 8\nprintf edited-value > \"$1\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(editor, []byte("#!/bin/sh\n[ \"$(stat -c %a \"$1\" 2>/dev/null || stat -f %Lp \"$1\")\" = 600 ] || exit 8\nprintf edited-value > \"$1\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	stdout.Reset()
