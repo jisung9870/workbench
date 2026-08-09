@@ -1,5 +1,7 @@
 # Workbench continuation plan
 
+> **Archived:** This handoff records the completed Activity Center integration before it was merged into `main`. Use the repository README and current feature docs for new work.
+
 Updated: 2026-08-07
 
 Status: **Ready to continue — Activity Center phase 1 is implemented and verified**
@@ -183,7 +185,7 @@ evidence in the same commit. Do not amend or rewrite the integrated history.
 
 Suggested next-session instruction:
 
-> Read `docs/handoff.md`, verify the current branch, and implement P0 Activity
+> Read `docs/archive/2026-08-07-dashboard-activity-center-handoff.md`, verify the current branch, and implement P0 Activity
 > Center filtering and acknowledgement. Preserve the fixed security boundaries,
 > run the documented verification, then report changes without starting P1.
 

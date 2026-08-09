@@ -483,9 +483,9 @@ Light or Dark explicitly. The preference is stored only in browser localStorage.
 The same loopback server exposes an offline, searchable product guide at
 `/guide`; use the **Guide** link in the top navigation after starting the
 Dashboard. See [docs/dashboard.md](docs/dashboard.md) for routes, security, and
-verification details. Future sessions should start with
-[docs/handoff.md](docs/handoff.md) for the verified baseline, remaining phases,
-security boundaries, and continuation commands.
+verification details. Current continuation should start from this README and the
+canonical feature documents above. The completed Activity Center handoff is retained in
+[docs/archive/2026-08-07-dashboard-activity-center-handoff.md](docs/archive/2026-08-07-dashboard-activity-center-handoff.md).
 
 ## Development
 
