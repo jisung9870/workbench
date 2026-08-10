@@ -71,7 +71,8 @@ Today Workbench selects shell/tmux/cmux/Windows Terminal backends, ensures/adopt
 - Orca becomes the sole owner of worktree, terminal, Agent, and Run/Task/Dispatch runtime lifecycle.
 - Workbench retains long-lived personal objects and stores only opaque Orca references, observed time/confidence, and result pointers.
 - tmux becomes human-only partitioning inside an Orca worktree; its foreground command is never promoted to Orca Agent authority.
-- Windows Terminal and planned iTerm2 are bootstrap/recovery surfaces; cmux stays optional/compatibility.
+- The target product has one workspace surface, Orca, on WSL and macOS. Windows Terminal, planned iTerm2,
+  and cmux receive no new product integration; existing adapters remain compatibility history until a gated deprecation.
 
 Therefore current Workbench Agent/session mutations are compatibility behavior, not evidence of target ownership. S1–S3 must preserve their v1 safety and deep links while avoiding new dependencies on this ownership model. Orca read/open/jump is gated at S4B; controlled launch is S8; stop/remove has no approved target stage in the current roadmap.
 
@@ -100,7 +101,7 @@ Risk uses the Dashboard specification's `read|write|destructive` vocabulary. “
 
 | Current action | Current owner | Canonical target owner / target area | Risk | Status | Migration gate |
 |---|---|---|---|---|---|
-| `open_project` | Workbench backend registry + managed-session service; selected tmux/cmux/Windows Terminal adapter | Orca open/jump, Projects/Today; native fallback on unavailability | write (runtime launch) | Current v1 compatibility; target planned | Freeze v1 in S0–S3; S4B capability/version, canonical repo/path/branch revalidation and fallback acceptance before Orca path |
+| `open_project` | Workbench backend registry + managed-session service; selected tmux/cmux/Windows Terminal adapter | Orca open/jump, Projects/Today; manual break-glass on unavailability | write (runtime launch) | Current v1 compatibility; target planned | Freeze v1 in S0–S3; S4B capability/version, canonical repo/path/branch revalidation and break-glass acceptance before Orca path |
 | `attach_session` | tmux via Workbench session manager | Human tmux partition / terminal handoff, Projects or Runs | read/jump with runtime attach side effect | Current, only from Dashboard process already in tmux | Preserve CLI handoff; no target browser emulation. Revisit after S4B human-partition link contract |
 | `adopt_session` | Workbench session manager after registered name and canonical start-path verification | Human tmux explicit link, not Agent ownership | destructive (ownership grant) | Current compatibility only | Do not re-expose in new IA until explicit S4B migration fixture proves link identity and rollback |
 | `stop_session` | Workbench session manager after complete managed ownership reread | tmux human partition; Orca must not be inferred owner | destructive | Current compatibility only | Keep behind current confirmation; no S1–S3 target action. Separate post-S4B ownership/stop decision gate required |
@@ -127,7 +128,7 @@ Backend scope:
 - Define a read-only `SystemRecoveryQuery` boundary over existing Doctor/profile/backend/server facts plus root-owned verified manifest/checkpoint inputs. The root repository remains owner of profile selection, provisioning manifest, and aggregate restore entrypoint.
 - Add portable inventory and backup/verify/restore-dry-run contracts only through established CLI ownership; Dashboard displays capability tier, manifest freshness, last checkpoint, and exact recovery command. It must not execute install/repair.
 - Preserve current v1 handler/security behavior and current store backups. Resolve the body-limit documentation mismatch and inventory sensitive path fields.
-- Supply fixtures for missing/expired manifest, unsupported iTerm2/macOS, unavailable Orca/Workbench, corrupt current registry, dirty child preservation, and terminal-required handoff.
+- Supply fixtures for missing/expired manifest, unsupported macOS Orca, unavailable Orca/Workbench, corrupt current registry, dirty child preservation, and terminal-required handoff.
 
 Gate: root S1 smoke/restore evidence must be accepted. S1 does not introduce the personal Markdown model, SQLite, v2 fields, or Orca mutation.
 
@@ -191,7 +192,7 @@ Dependency direction is adapters → application service → core policies/ports
 
 ### New S1–S3 fixtures
 
-- S1: verified/expired/mixed-run manifest; dirty child; synthetic corrupt backup; Workbench/Orca unavailable native recovery; unsupported iTerm2 capability.
+- S1: verified/expired/mixed-run manifest; dirty child; synthetic corrupt backup; Workbench/Orca unavailable manual break-glass recovery; unsupported macOS Orca capability.
 - S2: valid/minimal, unknown-field, truncated/corrupt and concurrent Markdown; stable-ID rename/link; duplicate relation; C2/O1 replay; deleted/corrupt projection; export → clean import → rebuild; personal/work crossing; Secret/path/prompt sentinels.
 - S3: identical CLI/HTTP plan/apply fixture; stale revision after preview; duplicate idempotency; timeout then reconcile; partial survivor; terminal-required handoff; server restart between plan and apply; legacy v1 action/deep-link regression.
 
@@ -221,7 +222,7 @@ Cross-platform CI currently runs the full test, vet, and build commands on Ubunt
 - Which filesystem paths are essential locally, and which must be replaced by stable refs/redacted display values? Perform threat/UX review before target envelope design.
 - Does the body limit intentionally permit approximately 16 MiB, or should code match the documented 16 KiB? S1 compatibility/security review must choose and test one value.
 - How is an explicit human tmux partition linked to an Orca worktree without granting Agent ownership? S4B, not S1–S3, owns the stable-link fixture.
-- iTerm2 has target ownership but no current Workbench adapter or smoke evidence. Report unavailable/experimental until implemented and tested.
+- Windows Terminal, iTerm2, and cmux have no target ownership. Preserve current compatibility facts without adding new product integration; remove only after the Orca migration/deprecation gate.
 - No current accepted gate authorizes target stop/remove for Orca Agent, worktree, or generic Task. Keep those actions absent rather than extrapolating from v1.
 
 ## 10. Explicit non-goals
