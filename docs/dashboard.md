@@ -164,6 +164,7 @@ for narrow screens, and print styles remove the navigation chrome.
 | `stop_session` | `project_id` | re-reads complete Workbench ownership before killing the exact session |
 | `update_environment` | typed `environment` mutation | metadata, export, Secret reference, or expiry operation only; no plaintext Secret field |
 | `update_profile` | complete typed `profile` mutation | active profile only; validated atomic replacement with backup |
+| `update_secret` | typed `secret` mutation | set/remove by service and field; replacement value is write-only and plaintext is never returned |
 | `start_agent` | `project_id`, `agent_kind`, optional `backend` | detached tmux/cmux/Windows Terminal runtime |
 | `jump_agent` | `task_id` | registered active task only |
 | `stop_agent` | `task_id` | registered ownership revalidation; UI confirmation |
@@ -193,7 +194,7 @@ the UI, and recorded in bounded local history.
 - every action requires a random per-process token embedded in the same-origin
   page and sent in `X-Workbench-Token`;
 - an `Origin` header, when present, must match the request host;
-- request JSON has a 16 KiB limit and rejects unknown fields or trailing values;
+- the complete request JSON body has a maximum size of exactly 16 KiB (16,384 bytes): a valid 16,384-byte request may decode, while 16,385 bytes or more returns HTTP 413 with `ACTION_REQUEST_TOO_LARGE` before action execution; unknown fields and trailing values are rejected;
 - responses do not enable CORS and use a restrictive Content Security Policy,
   frame denial, no-referrer, no-sniff, and no-store headers;
 - Guide, theme, CSS, and JavaScript assets are embedded in the binary and make
@@ -207,9 +208,10 @@ committed asset.
 
 ## Verification
 
-Handler tests cover the versioned envelope, action token and origin checks,
-unknown-field rejection, Dashboard/Guide routes and embedded assets, loopback
-binding, and listener shutdown. Node tests exercise theme defaulting,
+Handler tests cover the versioned envelope, all current page/Guide aliases and
+all 15 v1 action request shapes, the exact 16,384-byte action boundary, action
+token and origin checks, unknown/trailing-field rejection, embedded assets,
+loopback binding, and listener shutdown. Node tests exercise theme defaulting,
 persistence, invalid values, and unavailable localStorage. Fake executors verify
 browser/cmux command arrays, tmux snapshot parsing and stable-ID jumps, and Git status arguments. The UI JavaScript is
 syntax-checked without starting a browser, and the release verification includes

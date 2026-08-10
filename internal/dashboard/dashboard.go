@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -39,7 +40,7 @@ import (
 //go:embed assets/*
 var assets embed.FS
 
-const maxActionBody = (16 << 20) + (64 << 10)
+const maxActionBody = 16 << 10
 
 type ChangeSummary = overview.ChangeSummary
 
@@ -363,14 +364,24 @@ func (handler *Handler) serveAction(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, maxActionBody)
-	decoder := json.NewDecoder(request.Body)
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(writer, http.StatusRequestEntityTooLarge, "ACTION_REQUEST_TOO_LARGE", "dashboard action request exceeds 16,384 bytes", nil)
+			return
+		}
+		writeError(writer, http.StatusBadRequest, "INVALID_ACTION", "could not read dashboard action request", nil)
+		return
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	var action ActionRequest
-	if err := decoder.Decode(&action); err != nil {
+	if err = decoder.Decode(&action); err != nil {
 		writeError(writer, http.StatusBadRequest, "INVALID_ACTION", err.Error(), nil)
 		return
 	}
-	if err := ensureEOF(decoder); err != nil {
+	if err = ensureEOF(decoder); err != nil {
 		writeError(writer, http.StatusBadRequest, "INVALID_ACTION", err.Error(), nil)
 		return
 	}

@@ -94,7 +94,7 @@ func TestHandlerServesDashboardGuideAndThemeAssets(t *testing.T) {
 	}{
 		{path: "/", contentType: "text/html", contains: []string{`class="dashboard-page page-dashboard"`, `href="/projects"`, `href="/activity"`, `href="/settings"`, `href="/system"`, `id="category-project-count"`, `id="theme-select"`, `href="/guide"`, `/assets/theme.js`, `id="overview-heading"`, `id="overview-attention"`, `id="overview-locations"`, `id="overview-tools"`, `id="activity-heading"`, `id="activity-events"`, `id="tmux-sessions"`, `id="tmux-availability"`, `id="scheduler-status"`, `id="scheduler-jobs"`, `id="unregistered-tasks"`, `id="contexts-heading"`, `id="context-status"`, `id="contexts"`, `id="agent-history"`, `id="agent-registry-path"`, `id="clear-agent-history"`, `id="workflows"`, `id="workflow-history"`, `id="task-terminal-note"`, `data-task-action="jump_task"`, `data-task-action="stop_task"`}},
 		{path: "/projects", contentType: "text/html", contains: []string{`class="dashboard-page page-projects"`, `data-page-link="projects"`}},
-		{path: "/activity", contentType: "text/html", contains: []string{`class="dashboard-page page-activity"`, `<details class="session-observer"`, `id="activity-events"`}},
+		{path: "/activity", contentType: "text/html", contains: []string{`class="dashboard-page page-activity"`, `id="tmux-observer"`, `class="session-observer"`, `id="activity-events"`}},
 		{path: "/settings", contentType: "text/html", contains: []string{`class="dashboard-page page-settings"`, `id="profile-settings"`, `id="secret-catalog"`}},
 		{path: "/system", contentType: "text/html", contains: []string{`class="dashboard-page page-system"`, `id="tool-catalog"`, `id="doctor"`}},
 		{path: "/guide", contentType: "text/html", contains: []string{`id="guide-search"`, `id="architecture"`, `id="cli-reference"`, `id="troubleshooting"`, `/assets/dashboard-overview-light.jpg`, `alt="Workbench Dashboard 화면 구성`}},
@@ -188,6 +188,135 @@ func TestHandlerRequiresSameOriginTokenForActions(t *testing.T) {
 	}
 }
 
+func TestHandlerKeepsV1RouteCompatibility(t *testing.T) {
+	handler, err := NewHandler(&fakeService{}, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/", "/projects", "/activity", "/settings", "/system", "/guide", "/guide/", "/docs", "/docs/"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			t.Run(method+" "+path, func(t *testing.T) {
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, httptest.NewRequest(method, path, nil))
+				if response.Code != http.StatusOK {
+					t.Fatalf("v1 route status=%d, want %d", response.Code, http.StatusOK)
+				}
+			})
+		}
+	}
+	for _, path := range []string{"/today", "/inbox", "/runs", "/integrations", "/api/v2/today"} {
+		t.Run("unimplemented "+path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("unimplemented route status=%d, want %d", response.Code, http.StatusNotFound)
+			}
+		})
+	}
+}
+
+func TestHandlerKeepsAllV1ActionRequestShapes(t *testing.T) {
+	service := &fakeService{}
+	handler, err := NewHandler(service, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bodies := []string{
+		`{"action":"open_project","project_id":"alpha","backend":"tmux"}`,
+		`{"action":"attach_session","session_name":"alpha"}`,
+		`{"action":"adopt_session","project_id":"alpha"}`,
+		`{"action":"stop_session","project_id":"alpha"}`,
+		`{"action":"update_environment","environment":{"id":"dev","operation":"metadata","aws_profile":"sandbox"}}`,
+		`{"action":"update_profile","profile":{"default_backend":"auto","prefer_current_tmux":true,"backend_priority":[],"editor":"nvim","windows_terminal_profile":"","windows_terminal_distro":"","windows_terminal_window":"last","windows_terminal_mode":"tab"}}`,
+		`{"action":"update_secret","secret":{"operation":"set","service":"github","field":"token","value":"write-only"}}`,
+		`{"action":"start_agent","project_id":"alpha","agent_kind":"codex","backend":"tmux"}`,
+		`{"action":"jump_agent","task_id":"task-1"}`,
+		`{"action":"stop_agent","task_id":"task-1"}`,
+		`{"action":"jump_task","task_id":"task-1"}`,
+		`{"action":"stop_task","task_id":"task-1"}`,
+		`{"action":"clear_agent_history","project_id":"alpha","task_ids":["task-1"]}`,
+		`{"action":"jump_pane","pane_id":"%1"}`,
+		`{"action":"run_workflow","project_id":"alpha","workflow_id":"project.test"}`,
+	}
+	for _, body := range bodies {
+		t.Run(body, func(t *testing.T) {
+			request := authorizedActionRequest(body)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("v1 action request status=%d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+			}
+		})
+	}
+	if got := service.actions.Load(); got != int32(len(bodies)) {
+		t.Fatalf("service executions=%d, want %d", got, len(bodies))
+	}
+}
+
+func TestHandlerActionRequestSizeBoundary(t *testing.T) {
+	const valid = `{"action":"open_project","project_id":"alpha"}`
+	t.Run("exactly 16384 bytes executes", func(t *testing.T) {
+		service := &fakeService{}
+		handler, err := NewHandler(service, "secret")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := valid + strings.Repeat(" ", maxActionBody-len(valid))
+		if len(body) != 16384 {
+			t.Fatalf("fixture size=%d", len(body))
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, authorizedActionRequest(body))
+		if response.Code != http.StatusOK || service.actions.Load() != 1 {
+			t.Fatalf("boundary request status=%d calls=%d body=%s", response.Code, service.actions.Load(), response.Body.String())
+		}
+	})
+
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "valid JSON plus whitespace", body: valid + strings.Repeat(" ", maxActionBody+1-len(valid))},
+		{name: "malformed body", body: "DO_NOT_ECHO_BODY" + strings.Repeat("x", maxActionBody+1-len("DO_NOT_ECHO_BODY"))},
+	} {
+		t.Run(test.name+" is rejected before execution", func(t *testing.T) {
+			service := &fakeService{}
+			handler, err := NewHandler(service, "secret")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(test.body) != 16385 {
+				t.Fatalf("fixture size=%d", len(test.body))
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, authorizedActionRequest(test.body))
+			if response.Code != http.StatusRequestEntityTooLarge || service.actions.Load() != 0 {
+				t.Fatalf("oversized request status=%d calls=%d body=%s", response.Code, service.actions.Load(), response.Body.String())
+			}
+			var envelope output.Envelope
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.OK || envelope.Error == nil || envelope.Error.Code != "ACTION_REQUEST_TOO_LARGE" || envelope.Error.Message != "dashboard action request exceeds 16,384 bytes" {
+				t.Fatalf("unexpected oversized response: %#v", envelope)
+			}
+			for _, unsafe := range []string{"DO_NOT_ECHO_BODY", "http: request body too large", "invalid character"} {
+				if strings.Contains(response.Body.String(), unsafe) {
+					t.Fatalf("oversized response exposed %q: %s", unsafe, response.Body.String())
+				}
+			}
+		})
+	}
+}
+
+func authorizedActionRequest(body string) *http.Request {
+	request := httptest.NewRequest(http.MethodPost, "http://workbench.local/api/v1/actions", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "http://workbench.local")
+	request.Header.Set("X-Workbench-Token", "secret")
+	return request
+}
+
 func TestHandlerRejectsUnknownActionFields(t *testing.T) {
 	service := &fakeService{}
 	handler, err := NewHandler(service, "secret")
@@ -201,6 +330,19 @@ func TestHandlerRejectsUnknownActionFields(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || service.actions.Load() != 0 {
 		t.Fatalf("unknown action field was accepted: status=%d calls=%d", response.Code, service.actions.Load())
+	}
+}
+
+func TestHandlerRejectsTrailingActionValues(t *testing.T) {
+	service := &fakeService{}
+	handler, err := NewHandler(service, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, authorizedActionRequest(`{"action":"open_project","project_id":"alpha"} {"action":"stop_session"}`))
+	if response.Code != http.StatusBadRequest || service.actions.Load() != 0 || !strings.Contains(response.Body.String(), "multiple JSON values are not allowed") {
+		t.Fatalf("trailing action value was accepted: status=%d calls=%d body=%s", response.Code, service.actions.Load(), response.Body.String())
 	}
 }
 
