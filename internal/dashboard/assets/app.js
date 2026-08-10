@@ -61,7 +61,8 @@ function findFocusTarget(identity) {
 }
 
 function focusTargetUnavailable(element) {
-  if (!element || element.isConnected === false || element.disabled || element.getAttribute?.("aria-disabled") === "true" || element.hidden || element.closest?.("[hidden]")) return true;
+  // ARIA-disabled may intentionally remain focusable (Inbox); native disabled and hidden controls may not.
+  if (!element || element.isConnected === false || element.disabled || element.hidden || element.closest?.("[hidden]")) return true;
   const style = typeof getComputedStyle === "function" ? getComputedStyle(element) : null;
   if (style && (style.display === "none" || style.visibility === "hidden")) return true;
   return typeof element.getClientRects === "function" && element.getClientRects().length === 0;

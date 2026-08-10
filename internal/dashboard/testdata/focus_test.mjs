@@ -99,8 +99,8 @@ test("restores a generated form control by form id and name without label or pos
   assert.equal(runtime.document.activeElement, after);
 });
 
-test("falls back only to the visible route heading for removed, disabled, hidden, or unavailable controls", () => {
-  for (const replacement of [null, element({ id: "refresh", disabled: true }), element({ id: "refresh", visible: false }), element({ id: "refresh", ariaDisabled: true })]) {
+test("falls back only to the visible route heading for removed, native-disabled, or hidden controls", () => {
+  for (const replacement of [null, element({ id: "refresh", disabled: true }), element({ id: "refresh", hidden: true }), element({ id: "refresh", visible: false })]) {
     const heading = element({ id: "route-heading", dataset: { routeHeading: "" }, tagName: "H1" });
     const destructive = element({ id: "stop-task" });
     const before = element({ id: "refresh" });
@@ -115,13 +115,17 @@ test("falls back only to the visible route heading for removed, disabled, hidden
   }
 });
 
-test("treats the focusable planned Inbox control as unavailable for automatic restoration", () => {
+test("restores focus to the present ARIA-disabled Inbox control after rerender", () => {
   const heading = element({ id: "route-heading", dataset: { routeHeading: "" }, tagName: "H1" });
-  const inbox = element({ id: "inbox-planned", ariaDisabled: true });
-  const runtime = harness([heading, inbox]);
-  const identity = runtime.focusIdentityFor(inbox);
-  assert.equal(runtime.restoreFocus(identity), "fallback");
-  assert.equal(runtime.document.activeElement, heading);
+  const before = element({ id: "inbox-planned", ariaDisabled: true });
+  const runtime = harness([heading, before]);
+  const identity = runtime.focusIdentityFor(before);
+  before.isConnected = false;
+  const after = element({ id: "inbox-planned", ariaDisabled: true });
+  runtime.setElements([heading, after]);
+  assert.equal(runtime.restoreFocus(identity), "restored");
+  assert.equal(runtime.document.activeElement, after);
+  assert.deepEqual(runtime.notices, []);
 });
 
 test("does not invent identity from text, DOM order, or a Secret value", () => {
