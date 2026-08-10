@@ -130,16 +130,20 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   z-index: 10;
 }
 .topbar-start, .brand, .top-status, .task-title, .guide-tools { display: flex; align-items: center; gap: 12px; }
-.topbar-start { min-width: 0; }
+.topbar-start { min-width: 0; flex: 1; }
 .brand { color: var(--text); text-decoration: none; }
 .brand-mark { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font-weight: 900; }
 .brand > span:last-child { display: grid; }
 .brand small, .top-status, .panel small, .health-card small { color: var(--muted); }
-.product-nav { display: flex; align-items: center; gap: 3px; margin-left: 10px; overflow-x: auto; }
-.product-nav a { color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 700; padding: 7px 10px; border-radius: 8px; }
-.product-nav a:hover, .product-nav a:focus-visible { color: var(--text); background: var(--panel-2); outline: none; }
+.product-nav { display: flex; align-items: center; gap: 3px; min-width: 0; margin-left: 10px; overflow-x: auto; }
+.product-nav a, .product-nav button, .help-nav a { flex: 0 0 auto; min-height: 34px; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 700; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; }
+.product-nav a:hover, .product-nav a:focus-visible, .product-nav button:focus-visible, .help-nav a:hover, .help-nav a:focus-visible { color: var(--text); background: var(--panel-2); outline: none; }
 .product-nav a.active { color: var(--text); background: var(--panel-2); }
+.product-nav .planned-area { color: var(--muted); border: 1px dashed var(--line-strong); cursor: default; }
+.product-nav .planned-area span { padding: 2px 5px; border-radius: 999px; background: var(--panel-3); font-size: 9px; letter-spacing: .04em; }
+.help-nav { display: flex; align-items: center; flex: 0 0 auto; border-left: 1px solid var(--line); padding-left: 8px; }
 .top-status { font-size: 13px; }
+.snapshot-generated { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .dot { color: var(--faint); }
 .theme-control { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .theme-control select { min-height: 34px; padding: 5px 28px 5px 9px; cursor: pointer; }
@@ -149,6 +153,14 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .sidebar { position: sticky; top: 72px; align-self: start; max-height: calc(100vh - 72px); overflow-y: auto; }
 .detail { border-right: 0; border-left: 1px solid var(--line); }
 .content { padding: 28px; min-width: 0; }
+.failure-summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; padding: 16px; border: 1px solid var(--danger-line); border-radius: 13px; background: var(--danger-soft); }
+.failure-summary h2 { margin: 0; font-size: 17px; }
+.failure-summary p { flex: 1; margin: 2px 0 0; color: var(--muted); line-height: 1.5; }
+.failure-summary code { padding: 4px 7px; border-radius: 7px; background: var(--surface); color: var(--danger); font-size: 11px; overflow-wrap: anywhere; }
+.failure-summary:focus-visible, [data-route-heading]:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+.settings-route-heading { display: none; margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.settings-route-heading h1 { font-size: 28px; }
+.settings-route-heading p { max-width: 720px; margin: 8px 0 0; color: var(--muted); line-height: 1.55; }
 .operations-overview { padding-bottom: 28px; margin-bottom: 28px; border-bottom: 1px solid var(--line); }
 .activity-panel { min-height: 0; margin-bottom: 14px; }
 .activity-panel h2 { margin: 0; font-size: 22px; }
@@ -182,6 +194,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .page-projects .sidebar .health-card, .page-projects .sidebar .session-observer, .page-projects .operations-overview, .page-projects .activity-panel, .page-projects .control-grid, .page-projects .secrets-panel { display: none; }
 .page-activity .sidebar > .projects-heading, .page-activity .sidebar > .project-list, .page-activity .sidebar > .health-card, .page-activity .content .control-grid, .page-activity .content .secrets-panel, .page-activity #empty, .page-activity #workspace { display: none; }
 .page-settings .sidebar, .page-settings .detail, .page-settings .operations-overview, .page-settings .activity-panel, .page-settings #empty, .page-settings #workspace { display: none; }
+.page-settings .settings-route-heading { display: block; }
 .page-system .sidebar > .projects-heading, .page-system .sidebar > .project-list, .page-system .sidebar [aria-labelledby="unregistered-heading"], .page-system .activity-panel, .page-system .profile-panel, .page-system .secrets-panel, .page-system #empty, .page-system #workspace, .page-system .detail { display: none; }
 .page-system .layout { grid-template-columns: 260px minmax(0, 1fr); }
 .page-system .control-grid { grid-template-columns: 1fr; }
@@ -469,6 +482,12 @@ td { color: var(--muted); }
 @media (max-width: 720px) {
   .topbar { height: auto; min-height: 64px; padding: 12px 16px; flex-wrap: wrap; }
   .top-status .dot, .top-status #profile { display: none; }
+  .topbar-start { width: 100%; }
+  .brand > span:last-child { display: none; }
+  .product-nav { flex: 1; }
+  .help-nav { padding-left: 4px; }
+  .top-status { width: 100%; justify-content: space-between; flex-wrap: wrap; }
+  .snapshot-generated { width: 100%; }
   .layout { display: block; }
   .sidebar, .detail { border: 0; border-bottom: 1px solid var(--line); }
   .sidebar { position: static; max-height: none; overflow: visible; }
@@ -487,6 +506,10 @@ td { color: var(--muted); }
   .history-actions { align-items: stretch; flex-direction: column; }
   .theme-control > span { display: none; }
   .product-nav { margin-left: 0; }
+  body, button, input, select { font-size: 16px; }
+  button, .button, input, select, .product-nav a, .product-nav button, .help-nav a { min-height: 44px; }
+  .session-actions button, .context-secret-list button { min-width: 44px; min-height: 44px; font-size: 12px; }
+  .failure-summary { display: grid; }
 }
 
 @media print {

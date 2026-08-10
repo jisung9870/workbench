@@ -3,6 +3,125 @@ const state = { snapshot: null, projectId: null, taskId: null };
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 
+const focusDataDescriptors = {
+  pageLink: [],
+  project: [],
+  task: [],
+  overviewTask: [],
+  workflowId: [],
+  paneId: [],
+  taskAction: [],
+  action: ["backend", "agent"],
+  sessionAction: ["sessionName", "projectId"],
+  secretService: ["secretField"],
+  environmentOperation: ["variable"],
+};
+
+function focusIdentityFor(element = document.activeElement) {
+  if (!element || element === document.body || typeof element.focus !== "function") return null;
+  if (element.dataset?.focusKey) return { type: "focus-key", value: element.dataset.focusKey };
+  if (element.id) return { type: "id", value: element.id };
+  for (const [primary, companions] of Object.entries(focusDataDescriptors)) {
+    if (element.dataset?.[primary] == null) continue;
+    const values = { [primary]: element.dataset[primary] };
+    companions.forEach(key => {
+      if (element.dataset[key] != null) values[key] = element.dataset[key];
+    });
+    return { type: "data", primary, values };
+  }
+  if (element.tagName === "SUMMARY" && element.parentElement?.id) {
+    return { type: "summary", value: element.parentElement.id };
+  }
+  const form = element.form || element.closest?.("form");
+  if (form?.id && element.name) return { type: "form-control", form: form.id, name: element.name };
+  return null;
+}
+
+function dataAttributeName(key) {
+  return `data-${key.replace(/[A-Z]/g, character => `-${character.toLowerCase()}`)}`;
+}
+
+function findFocusTarget(identity) {
+  if (!identity) return null;
+  if (identity.type === "id") return document.getElementById(identity.value);
+  if (identity.type === "focus-key") {
+    return Array.from(document.querySelectorAll("[data-focus-key]")).find(element => element.dataset.focusKey === identity.value) || null;
+  }
+  if (identity.type === "data") {
+    return Array.from(document.querySelectorAll(`[${dataAttributeName(identity.primary)}]`)).find(element =>
+      Object.entries(identity.values).every(([key, value]) => element.dataset[key] === value),
+    ) || null;
+  }
+  if (identity.type === "summary") return document.getElementById(identity.value)?.querySelector("summary") || null;
+  if (identity.type === "form-control") {
+    const form = document.getElementById(identity.form);
+    return Array.from(form?.elements || []).find(element => element.name === identity.name) || null;
+  }
+  return null;
+}
+
+function focusTargetUnavailable(element) {
+  if (!element || element.isConnected === false || element.disabled || element.getAttribute?.("aria-disabled") === "true" || element.hidden || element.closest?.("[hidden]")) return true;
+  const style = typeof getComputedStyle === "function" ? getComputedStyle(element) : null;
+  if (style && (style.display === "none" || style.visibility === "hidden")) return true;
+  return typeof element.getClientRects === "function" && element.getClientRects().length === 0;
+}
+
+function visibleRouteHeading() {
+  return Array.from(document.querySelectorAll("[data-route-heading]")).find(heading => !focusTargetUnavailable(heading)) || null;
+}
+
+function focusWithoutScroll(element) {
+  try {
+    element.focus({ preventScroll: true });
+  } catch {
+    element.focus();
+  }
+}
+
+function restoreFocus(identity) {
+  if (!identity) return "none";
+  const target = findFocusTarget(identity);
+  if (!focusTargetUnavailable(target)) {
+    focusWithoutScroll(target);
+    return "restored";
+  }
+  const heading = visibleRouteHeading();
+  if (heading) {
+    focusWithoutScroll(heading);
+    notice("The previous control is no longer available.");
+    return "fallback";
+  }
+  return "none";
+}
+
+function safeErrorCode(body, fallback) {
+  const code = body?.error?.code;
+  return typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code) ? code : fallback;
+}
+
+function showFailure(kind, code) {
+  const summary = $("failure-summary");
+  summary.dataset.failureKind = kind;
+  $("failure-summary-code").textContent = code;
+  $("failure-summary-text").textContent = kind === "snapshot"
+    ? "Dashboard data could not be refreshed. Existing information may be out of date; use Refresh to try again."
+    : "The action did not complete. Existing information remains available; review the current state before trying again.";
+  summary.hidden = false;
+}
+
+function clearFailure(kind = "") {
+  const summary = $("failure-summary");
+  if (kind && summary.dataset.failureKind !== kind) return;
+  summary.hidden = true;
+  summary.removeAttribute("data-failure-kind");
+}
+
+function setSnapshotState(message, generatedAt = "") {
+  $("snapshot-state").textContent = message;
+  $("snapshot-generated").textContent = generatedAt ? `Generated ${new Date(generatedAt).toLocaleString()}` : "";
+}
+
 document.querySelectorAll("[data-page-link]").forEach(link => {
   const active = document.body.classList.contains(`page-${link.dataset.pageLink}`);
   link.classList.toggle("active", active);
@@ -30,29 +149,44 @@ function taskCard(task) {
   return `<button class="agent-card ${task.id === state.taskId ? "selected" : ""}" data-task="${esc(task.id)}"><span class="agent-head"><span class="avatar">${esc(kind[0])}</span><span class="task-badges"><span class="provenance ${esc(provenance)}">${esc(provenance)}</span><span class="status ${esc(lifecycle)}">${esc(lifecycle)}</span></span></span><strong>${esc(kind)}</strong><small>${esc(location)} · ${esc(task.id)}</small></button>`;
 }
 
-async function load() {
+let loadSequence = 0;
+
+async function load({ focusIdentity = focusIdentityFor(), reason = "refresh" } = {}) {
+  const sequence = ++loadSequence;
+  setSnapshotState(state.snapshot ? "Refreshing snapshot" : "Loading snapshot", state.snapshot?.generated_at);
+  $("refresh").setAttribute("aria-busy", "true");
   try {
     const response = await fetch("/api/v1/snapshot", { headers: { Accept: "application/json" } });
     const body = await response.json();
-    if (!response.ok || !body.ok) throw new Error(body.error?.message || `HTTP ${response.status}`);
+    if (!response.ok || !body.ok) throw { body, fallbackCode: `HTTP_${response.status}` };
+    if (sequence !== loadSequence) return;
     state.snapshot = body.data;
     if (!state.projectId || !body.data.projects.some(project => project.id === state.projectId)) {
       state.projectId = body.data.projects[0]?.id || null;
     }
     render();
-  } catch (error) {
-    notice(`Snapshot failed: ${error.message}`, true);
+    clearFailure("snapshot");
+    setSnapshotState(reason === "action" ? "Action complete; snapshot refreshed" : "Snapshot ready", body.data.generated_at);
+    restoreFocus(focusIdentity);
+  } catch (failure) {
+    if (sequence !== loadSequence) return;
+    showFailure("snapshot", safeErrorCode(failure.body, failure.fallbackCode || "SNAPSHOT_FAILED"));
+    setSnapshotState("Snapshot refresh failed", state.snapshot?.generated_at);
+    restoreFocus(focusIdentity);
+  } finally {
+    if (sequence === loadSequence) $("refresh").removeAttribute("aria-busy");
   }
 }
 
 let actionQueue = Promise.resolve();
 
-function action(payload) {
-  actionQueue = actionQueue.then(() => performAction(payload), () => performAction(payload));
+function action(payload, focusTarget = document.activeElement) {
+  const focusIdentity = focusIdentityFor(focusTarget);
+  actionQueue = actionQueue.then(() => performAction(payload, focusIdentity), () => performAction(payload, focusIdentity));
   return actionQueue;
 }
 
-async function performAction(payload) {
+async function performAction(payload, focusIdentity) {
   try {
     const response = await fetch("/api/v1/actions", {
       method: "POST",
@@ -60,11 +194,15 @@ async function performAction(payload) {
       body: JSON.stringify(payload),
     });
     const body = await response.json();
-    if (!response.ok || !body.ok) throw new Error(body.error?.message || `HTTP ${response.status}`);
-    notice(body.data.message);
-    await load();
-  } catch (error) {
-    notice(error.message, true);
+    if (!response.ok || !body.ok) throw { body, fallbackCode: `HTTP_${response.status}` };
+    clearFailure();
+    notice("Action completed. Dashboard data is refreshing.");
+    await load({ focusIdentity, reason: "action" });
+  } catch (failure) {
+    const code = safeErrorCode(failure.body, failure.fallbackCode || "ACTION_FAILED");
+    showFailure("action", code);
+    notice(`Action did not complete (${code}).`, true);
+    restoreFocus(focusIdentity);
   }
 }
 
@@ -109,9 +247,11 @@ function render() {
   }).join("");
   document.querySelectorAll("[data-project]").forEach(button => {
     button.onclick = () => {
+      const focusIdentity = focusIdentityFor(button);
       state.projectId = button.dataset.project;
       state.taskId = null;
       render();
+      restoreFocus(focusIdentity);
     };
   });
 
@@ -188,7 +328,7 @@ function renderProfileSettings(settings) {
   const profile = settings.values || {};
   status.textContent = settings.name;
   status.className = "status available";
-  target.innerHTML = `<form id="profile-settings-form" class="context-editor profile-editor"><label>Default backend<select name="default_backend"><option value="auto">auto</option><option value="cmux">cmux</option><option value="tmux">tmux</option><option value="shell">shell</option><option value="windows-terminal">windows-terminal</option></select></label><label>Backend priority<input name="backend_priority" value="${esc((profile.backend_priority || []).join(", "))}" placeholder="cmux, tmux, shell"></label><label>Editor<input name="editor" value="${esc(profile.editor || "nvim")}" required></label><label class="profile-checkbox"><input name="prefer_current_tmux" type="checkbox" ${profile.prefer_current_tmux ? "checked" : ""}> Prefer current tmux client</label><label>Windows Terminal profile<input name="windows_terminal_profile" value="${esc(profile.windows_terminal_profile || "")}"></label><label>WSL distro<input name="windows_terminal_distro" value="${esc(profile.windows_terminal_distro || "")}"></label><label>Window<input name="windows_terminal_window" value="${esc(profile.windows_terminal_window || "last")}" list="windows-terminal-window-values" required><datalist id="windows-terminal-window-values"><option value="last"><option value="new"></datalist></label><label>Mode<select name="windows_terminal_mode"><option value="tab">tab</option><option value="split-auto">split-auto</option><option value="split-horizontal">split-horizontal</option><option value="split-vertical">split-vertical</option></select></label><button type="submit" class="primary">Save profile</button></form>`;
+  target.innerHTML = `<form id="profile-settings-form" class="context-editor profile-editor"><label>Default backend<select name="default_backend"><option value="auto">auto</option><option value="cmux">cmux</option><option value="tmux">tmux</option><option value="shell">shell</option><option value="windows-terminal">windows-terminal</option></select></label><label>Backend priority<input name="backend_priority" value="${esc((profile.backend_priority || []).join(", "))}" placeholder="cmux, tmux, shell"></label><label>Editor<input name="editor" value="${esc(profile.editor || "nvim")}" required></label><label class="profile-checkbox"><input name="prefer_current_tmux" type="checkbox" ${profile.prefer_current_tmux ? "checked" : ""}> Prefer current tmux client</label><label>Windows Terminal profile<input name="windows_terminal_profile" value="${esc(profile.windows_terminal_profile || "")}"></label><label>WSL distro<input name="windows_terminal_distro" value="${esc(profile.windows_terminal_distro || "")}"></label><label>Window<input name="windows_terminal_window" value="${esc(profile.windows_terminal_window || "last")}" list="windows-terminal-window-values" required><datalist id="windows-terminal-window-values"><option value="last"><option value="new"></datalist></label><label>Mode<select name="windows_terminal_mode"><option value="tab">tab</option><option value="split-auto">split-auto</option><option value="split-horizontal">split-horizontal</option><option value="split-vertical">split-vertical</option></select></label><button data-focus-key="profile-save" type="submit" class="primary">Save profile</button></form>`;
   const form = $("profile-settings-form");
   form.elements.default_backend.value = profile.default_backend || "auto";
   form.elements.windows_terminal_mode.value = profile.windows_terminal_mode || "tab";
@@ -280,7 +420,7 @@ function renderContexts(contexts, project) {
     ["Expiry", expiry.expires_at ? `${expiry.status} · ${new Date(expiry.expires_at).toLocaleString()}` : "Permanent"],
   ];
   const expiryValue = expiry.expires_at ? localDateTimeValue(new Date(expiry.expires_at)) : "";
-  target.innerHTML = `<dl class="context-metadata">${metadata.map(([label, value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join("")}</dl><form id="context-metadata-form" class="context-editor"><strong>Metadata</strong><label>AWS profile<input name="aws_profile" value="${esc(environment.aws_profile || "")}"></label><label>AWS region<input name="aws_region" value="${esc(environment.aws_region || "")}"></label><label>Kubernetes context<input name="kube_context" value="${esc(environment.kube_context || "")}"></label><label>Kubernetes namespace<input name="kube_namespace" value="${esc(environment.kube_namespace || "")}"></label><button type="submit">Save metadata</button></form><form id="context-expiry-form" class="context-editor inline"><label>Expires at<input name="expires_at" type="datetime-local" value="${esc(expiryValue)}" required></label><button type="submit">Set expiry</button><button type="button" id="context-expiry-clear">Clear</button></form><div class="context-group"><strong>Ordinary exports</strong>${exportKeys.length ? `<div class="context-secret-list">${exportKeys.map(key => `<div><code>${esc(key)}</code><button type="button" data-environment-operation="remove_export" data-variable="${esc(key)}">Remove</button></div>`).join("")}</div>` : '<p>No ordinary export keys</p>'}<form id="context-export-form" class="context-editor inline"><label>Variable<input name="variable" pattern="[A-Za-z_][A-Za-z0-9_]*" required></label><label>Value<input name="value"></label><button type="submit">Set export</button></form></div><div class="context-group"><strong>Secret references</strong>${secretReferences.length ? `<div class="context-secret-list">${secretReferences.map(item => `<div><code>${esc(item.variable)}</code><span class="status ${esc(item.status)}">${esc(item.status)}</span><button type="button" data-environment-operation="remove_secret_reference" data-variable="${esc(item.variable)}">Remove</button></div>`).join("")}</div>` : '<p>No secret references</p>'}<form id="context-secret-form" class="context-editor inline"><label>Variable<input name="variable" pattern="[A-Za-z_][A-Za-z0-9_]*" required></label><label>Reference<input name="reference" placeholder="sec://service/field" required></label><button type="submit">Set reference</button></form></div>`;
+  target.innerHTML = `<dl class="context-metadata">${metadata.map(([label, value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join("")}</dl><form id="context-metadata-form" class="context-editor"><strong>Metadata</strong><label>AWS profile<input name="aws_profile" value="${esc(environment.aws_profile || "")}"></label><label>AWS region<input name="aws_region" value="${esc(environment.aws_region || "")}"></label><label>Kubernetes context<input name="kube_context" value="${esc(environment.kube_context || "")}"></label><label>Kubernetes namespace<input name="kube_namespace" value="${esc(environment.kube_namespace || "")}"></label><button data-focus-key="context-metadata-save" type="submit">Save metadata</button></form><form id="context-expiry-form" class="context-editor inline"><label>Expires at<input name="expires_at" type="datetime-local" value="${esc(expiryValue)}" required></label><button data-focus-key="context-expiry-save" type="submit">Set expiry</button><button type="button" id="context-expiry-clear">Clear</button></form><div class="context-group"><strong>Ordinary exports</strong>${exportKeys.length ? `<div class="context-secret-list">${exportKeys.map(key => `<div><code>${esc(key)}</code><button type="button" data-environment-operation="remove_export" data-variable="${esc(key)}">Remove</button></div>`).join("")}</div>` : '<p>No ordinary export keys</p>'}<form id="context-export-form" class="context-editor inline"><label>Variable<input name="variable" pattern="[A-Za-z_][A-Za-z0-9_]*" required></label><label>Value<input name="value"></label><button data-focus-key="context-export-save" type="submit">Set export</button></form></div><div class="context-group"><strong>Secret references</strong>${secretReferences.length ? `<div class="context-secret-list">${secretReferences.map(item => `<div><code>${esc(item.variable)}</code><span class="status ${esc(item.status)}">${esc(item.status)}</span><button type="button" data-environment-operation="remove_secret_reference" data-variable="${esc(item.variable)}">Remove</button></div>`).join("")}</div>` : '<p>No secret references</p>'}<form id="context-secret-form" class="context-editor inline"><label>Variable<input name="variable" pattern="[A-Za-z_][A-Za-z0-9_]*" required></label><label>Reference<input name="reference" placeholder="sec://service/field" required></label><button data-focus-key="context-secret-save" type="submit">Set reference</button></form></div>`;
   bindContextEditor(environment.id);
 }
 
@@ -336,7 +476,7 @@ if (secretForm) {
     const values = new FormData(form);
     const value = values.get("value");
     form.elements.value.value = "";
-    action({ action: "update_secret", secret: { operation: "set", service: values.get("service"), field: values.get("field"), value, replace: values.get("replace") === "on" } });
+    action({ action: "update_secret", secret: { operation: "set", service: values.get("service"), field: values.get("field"), value, replace: values.get("replace") === "on" } }, event.submitter || document.activeElement);
   };
 }
 
@@ -458,7 +598,7 @@ document.querySelectorAll("[data-action]").forEach(button => {
     const payload = { action: button.dataset.action, project_id: state.projectId };
     if (button.dataset.backend) payload.backend = button.dataset.backend;
     if (button.dataset.agent) payload.agent_kind = button.dataset.agent;
-    action(payload);
+    action(payload, button);
   };
 });
 
@@ -466,7 +606,7 @@ document.querySelectorAll("[data-task-action]").forEach(button => {
   button.onclick = () => {
     if (!state.taskId || button.disabled) return;
     if (button.dataset.taskAction === "stop_task" && !window.confirm(`Stop managed task ${state.taskId}?`)) return;
-    action({ action: button.dataset.taskAction, task_id: state.taskId });
+    action({ action: button.dataset.taskAction, task_id: state.taskId }, button);
   };
 });
 
@@ -475,14 +615,18 @@ $("clear-agent-history").onclick = () => {
   if (!state.projectId || projectTasks.length === 0) return;
   if (!window.confirm(`Clear ${projectTasks.length} terminal task records for ${state.projectId}? Active tasks will be preserved and the registry will be backed up.`)) return;
   state.taskId = null;
-  action({ action: "clear_agent_history", project_id: state.projectId, task_ids: projectTasks.map(task => task.id) });
+  action({ action: "clear_agent_history", project_id: state.projectId, task_ids: projectTasks.map(task => task.id) }, $("clear-agent-history"));
 };
 
-$("refresh").onclick = load;
+$("inbox-planned").onclick = event => {
+  event.preventDefault();
+  notice("Inbox is planned and unavailable; it requires S2.");
+};
+$("refresh").onclick = event => load({ focusIdentity: focusIdentityFor(event.currentTarget), reason: "manual" });
 $("doctor-details").onclick = () => {
-  const failures = (state.snapshot?.doctor?.capabilities || []).filter(capability => capability.status !== "available").map(capability => `${capability.name}: ${capability.reason || capability.status}`).join("\n") || "All capabilities available";
-  notice(failures);
+  const failures = (state.snapshot?.doctor?.capabilities || []).filter(capability => capability.status !== "available").length;
+  notice(failures ? `${failures} capabilities require review. See Workbench Doctor on this page.` : "All capabilities are available.");
 };
 
 load();
-window.setInterval(load, 15000);
+window.setInterval(() => load({ focusIdentity: focusIdentityFor(), reason: "timer" }), 15000);
